@@ -1,0 +1,196 @@
+name: Container images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Account whose SSM image manifest will be updated
+        type: choice
+        options: [dev, staging, prod]
+        required: true
+      frontend_image:
+        description: Full frontend digest reference (ghcr.io/...@sha256:...)
+        type: string
+        required: true
+      backend_image:
+        description: Full backend digest reference (ghcr.io/...@sha256:...)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22.17.0"
+
+jobs:
+  validate:
+    name: Test and build applications
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+      - name: Frontend checks
+        working-directory: app/frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/backend/pyproject.toml
+      - name: Backend checks
+        working-directory: app/backend
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          ruff check .
+          ruff format --check .
+          pytest
+          python -c 'from todo_api.main import app; assert app.title == "Todo API"'
+      - name: Build containers without pushing
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -t todo-frontend:test app/frontend
+          docker build --platform linux/amd64 -t todo-backend:test app/backend
+          docker compose config --quiet
+
+  publish:
+    name: Publish immutable images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-24.04
+    outputs:
+      frontend_image: ${{ steps.refs.outputs.frontend }}
+      backend_image: ${{ steps.refs.outputs.backend }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Derive lowercase image names
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "frontend=ghcr.io/${repository}-frontend" >> "$GITHUB_OUTPUT"
+          echo "backend=ghcr.io/${repository}-backend" >> "$GITHUB_OUTPUT"
+      - name: Build and push frontend
+        id: frontend
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: app/frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.names.outputs.frontend }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+      - name: Build and push backend
+        id: backend
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: app/backend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.names.outputs.backend }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - name: Capture digest-pinned references
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          frontend='${{ steps.names.outputs.frontend }}@${{ steps.frontend.outputs.digest }}'
+          backend='${{ steps.names.outputs.backend }}@${{ steps.backend.outputs.digest }}'
+          [[ "$frontend" =~ @sha256:[a-f0-9]{64}$ ]]
+          [[ "$backend" =~ @sha256:[a-f0-9]{64}$ ]]
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+
+  update-dev-manifest:
+    name: Update dev image manifest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Verify account and update SSM
+        env:
+          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
+          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
+          BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
+        run: |
+          set -euo pipefail
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
+          manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
+          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
+          printf '### Published images\n- `%s`\n- `%s`\n' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote immutable images to ${{ inputs.target }}
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.target }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Validate immutable references
+        env:
+          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+          BACKEND_IMAGE: ${{ inputs.backend_image }}
+        run: |
+          set -euo pipefail
+          pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
+          [[ "$FRONTEND_IMAGE" =~ $pattern ]]
+          [[ "$BACKEND_IMAGE" =~ $pattern ]]
+      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ inputs.target == 'dev' && vars.AWS_ROLE_ARN_DEV || inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Verify account and promote manifest
+        env:
+          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
+          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+          BACKEND_IMAGE: ${{ inputs.backend_image }}
+        run: |
+          set -euo pipefail
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
+          manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
+          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
+          printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+

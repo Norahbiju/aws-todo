@@ -1,0 +1,6 @@
+# Replace @OWNER/TEAM with the team responsible for deployment security.
+/.github/workflows/ @OWNER/TEAM
+/infra/ @OWNER/TEAM
+/docs/security.md @OWNER/TEAM
+/docs/github-oidc-aws.md @OWNER/TEAM
+

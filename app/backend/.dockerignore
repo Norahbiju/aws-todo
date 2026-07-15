@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+tests
+.terraform
+.terragrunt-cache
+.idea
+.vscode
+

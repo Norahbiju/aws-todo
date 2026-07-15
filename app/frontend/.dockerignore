@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+.next
+coverage
+npm-debug.log*
+.terraform
+.terragrunt-cache
+.idea
+.vscode
+.tools
