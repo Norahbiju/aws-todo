@@ -17,6 +17,11 @@ permissions:
   packages: write
   id-token: write
 
+env:
+  # Verified dev account. Keeping this in the workflow makes the safety check
+  # independent of a duplicate repository variable.
+  DEV_AWS_ACCOUNT_ID: "484632959006"
+
 jobs:
   publish:
     name: Publish immutable images
@@ -90,7 +95,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
       - name: Verify account and update SSM
         env:
-          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
+          EXPECTED_ACCOUNT: ${{ env.DEV_AWS_ACCOUNT_ID }}
           PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
           FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
           BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
@@ -128,7 +133,7 @@ jobs:
       - name: Read and validate the current dev manifest
         id: source
         env:
-          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
+          EXPECTED_ACCOUNT: ${{ env.DEV_AWS_ACCOUNT_ID }}
           PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
         run: |
           set -euo pipefail
@@ -180,4 +185,3 @@ jobs:
           [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
           aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$IMAGE_MANIFEST" --overwrite
           printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
-
