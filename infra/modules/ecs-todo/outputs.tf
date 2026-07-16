@@ -35,6 +35,7 @@ output "private_subnet_ids" {
 
 output "image_manifest_git_sha" {
   description = "Git SHA recorded by the image-manifest workflow."
-  value       = try(local.image_manifest.git_sha, null)
+  # The SSM provider marks the entire parameter value sensitive. A Git commit
+  # SHA is public deployment metadata, so explicitly declassify only this field.
+  value = nonsensitive(try(local.image_manifest.git_sha, null))
 }
-
