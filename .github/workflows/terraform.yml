@@ -229,4 +229,8 @@ jobs:
             { echo "### Deployment outputs"; echo '```json'; terragrunt output --working-dir "infra/live/${TARGET}" -json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Destroy completed for ${TARGET}" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          fi          
+
+
+
+
