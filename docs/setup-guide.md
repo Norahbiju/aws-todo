@@ -4,9 +4,9 @@ This is the one-time setup sequence. AWS deployment roles, shared state storage,
 
 ## 1. Local and repository prerequisites
 
-Install Git, Node.js 22, npm, Python 3.13, Docker, Terraform 1.15.5, Terragrunt 1.0.4, AWS CLI v2, and optionally TFLint/actionlint. Create a GitHub repository, commit this tree, set `main` as default, and enable Actions with read/write workflow access sufficient for packages and PR comments. Keep default `GITHUB_TOKEN` permissions minimal; each workflow declares its needs.
+Install Git, Node.js 22, npm, Python 3.13, Docker, Terraform 1.15.5, Terragrunt 1.0.4, AWS CLI v2, and optionally TFLint/actionlint. Create a GitHub repository, commit this tree, set `main` as default, and enable Actions with package-write access. Keep default `GITHUB_TOKEN` permissions minimal; each workflow declares its needs.
 
-Protect main using a ruleset: require PR review, application and Terraform checks, conversation resolution, and CODEOWNERS approval; block force pushes/deletion. Protect workflow and infrastructure paths. Enable secret scanning, dependency alerts, and immutable release/package policies appropriate to the organisation.
+Protect main using a ruleset: require PR review, conversation resolution, and CODEOWNERS approval; block force pushes/deletion. Protect workflow and infrastructure paths. The current workflows do not run on pull requests, so introduce separate non-deployment PR checks before marking application or Terraform checks as required. Enable secret scanning, dependency alerts, and immutable release/package policies appropriate to the organisation.
 
 ## 2. Shared state bucket
 
@@ -16,7 +16,7 @@ Grant all three deployment roles `s3:ListBucket` for `ecs-todo/*` plus object ge
 
 ## 3. GitHub OIDC roles
 
-Create the GitHub OIDC provider and one existing deployment role per AWS account. Trust `aud=sts.amazonaws.com` and exact subjects for trusted PRs, main dispatch, and protected environments as described in [GitHub OIDC](github-oidc-aws.md). For production, prefer a role whose deployment trust is only `repo:<OWNER>/<REPOSITORY>:environment:prod` and a separate read-only PR-plan role if organisational policy requires that separation.
+Create the GitHub OIDC provider and one existing deployment role per AWS account. Trust `aud=sts.amazonaws.com` and the exact `repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main` subject described in [GitHub OIDC](github-oidc-aws.md). GitHub Environments are not used. For stronger production separation later, use distinct plan and deployment roles with narrowly scoped permissions.
 
 The deployment policy needs the shared backend, optional KMS, named SSM parameter, and project resource actions. The following is a policy shape, not a drop-in least-privilege final policy; replace placeholders, split plan and deploy roles if possible, apply resource-level constraints supported by each API, and refine with IAM Access Analyzer:
 
@@ -39,26 +39,31 @@ The deployment policy needs the shared backend, optional KMS, named SSM paramete
 
 Some create/describe APIs require `Resource: "*"`; add request-tag and region conditions, then constrain post-create operations to exact ARN/tag patterns where AWS supports them. Separate `ssm:PutParameter` and mutation actions from Terraform plan roles. Validate the final policy against an actual plan with IAM Access Analyzer because provider releases can change the required read actions.
 
-## 4. Repository variables and environments
+## 4. Repository variables
 
 Create these non-secret repository or organisation variables:
 
 | Variable | Value |
 |---|---|
 | `AWS_ROLE_ARN_DEV` | existing dev OIDC role ARN |
-| `AWS_ROLE_ARN_STAGING` | existing staging OIDC role ARN |
-| `AWS_ROLE_ARN_PROD` | existing prod OIDC role ARN |
 | `AWS_ACCOUNT_ID_DEV` | 12-digit dev account ID |
-| `AWS_ACCOUNT_ID_STAGING` | 12-digit staging account ID |
-| `AWS_ACCOUNT_ID_PROD` | 12-digit prod account ID |
 | `AWS_REGION` | deployment region, for example `us-east-1` |
 | `TF_STATE_BUCKET` | shared S3 bucket name |
 | `TF_STATE_KMS_KEY_ARN` | KMS ARN or an empty value for bucket-default encryption |
 | `SSM_IMAGE_PARAMETER_NAME` | `/ecs-todo/container-images` |
 
+Optional future variables, required only when their targets are selected:
+
+| Variable | Value |
+|---|---|
+| `AWS_ROLE_ARN_STAGING` | existing staging OIDC role ARN |
+| `AWS_ROLE_ARN_PROD` | existing prod OIDC role ARN |
+| `AWS_ACCOUNT_ID_STAGING` | 12-digit staging account ID |
+| `AWS_ACCOUNT_ID_PROD` | 12-digit prod account ID |
+
 Role ARNs and account IDs are identifiers, not credentials, but follow organisational variable/secrets policy. Do not add AWS access-key secrets.
 
-Create environments named exactly `dev`, `staging`, and `prod`. Add required reviewers; require staging and production approval at minimum; prevent self-review if available; restrict deployment branches to main; place environment-specific variables there if policy requires. Ensure OIDC subjects match these exact, case-sensitive names.
+No GitHub Environment is required. The workflows enforce `main` before AWS authentication or deployment. The optional workflow paths already exist, but staging and production variables and roles are not required until those targets are selected.
 
 ## 5. First publication and deployment
 
@@ -67,13 +72,12 @@ Create environments named exactly `dev`, `staging`, and `prod`. Add required rev
 3. Re-run the main image workflow after visibility is public. It assumes the dev role, verifies the dev account, and creates/updates the SSM JSON parameter.
 4. Inspect the summary and compare both GHCR digests with `aws ssm get-parameter --name /ecs-todo/container-images --query Parameter.Value --output text` under authorised read-only credentials.
 5. Dispatch Terraform with `action=plan,target=dev`. Review networking, IAM, image digests, costs, and outputs.
-6. Dispatch `action=apply,target=dev` from main. Review the saved-plan summary, approve the `dev` environment, and allow the second job to apply that exact artifact.
+6. Dispatch `action=apply,target=dev` from main. Review the saved-plan summary; the second job verifies and applies that exact artifact without an environment approval gate.
 7. Open `http://<alb_dns_name>` from the output and test create/edit/complete/delete. Check both target groups, ECS health, logs, and alarms.
-8. Dispatch the image workflow for staging with the exact dev frontend/backend digest references. Approve staging; then plan and apply staging.
-9. Repeat the same digest promotion and protected plan/apply for production.
+8. When ready, configure staging or production variables, roles, and main-branch OIDC trust; the existing workflow target can then be selected without another workflow redesign.
 
 ## 6. Safe destruction
 
-Dispatch Terraform from main with `action=destroy`, the target, and exact confirmation `DESTROY <target>`. Review the complete destroy text in the artifact/summary, approve its environment, and let the exact destroy plan apply. Production ALB deletion protection intentionally blocks destruction; first submit and approve a normal code change setting that protection off, then generate a fresh destroy plan. Never force local deletion or disable locking.
+Dispatch Terraform from main with `action=destroy`, the desired target, and exact confirmation `DESTROY <target>`. Review the complete destroy text in the artifact/summary; the exact destroy plan then applies without an environment approval gate. Never force local deletion or disable locking.
 
 References: [GitHub repository variables](https://docs.github.com/actions/learn-github-actions/variables), [package visibility](https://docs.github.com/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), [S3 security](https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html).

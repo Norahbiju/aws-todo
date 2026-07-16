@@ -1,23 +1,15 @@
 name: Container images
 
 on:
-  pull_request:
   push:
     branches: [main]
+  # Optional future promotion path. Missing staging/prod variables do not affect main pushes.
   workflow_dispatch:
     inputs:
       target:
-        description: Account whose SSM image manifest will be updated
+        description: Optional account that receives the current dev image manifest
         type: choice
-        options: [dev, staging, prod]
-        required: true
-      frontend_image:
-        description: Full frontend digest reference (ghcr.io/...@sha256:...)
-        type: string
-        required: true
-      backend_image:
-        description: Full backend digest reference (ghcr.io/...@sha256:...)
-        type: string
+        options: [staging, prod]
         required: true
 
 permissions:
@@ -32,6 +24,7 @@ env:
 jobs:
   validate:
     name: Test and build applications
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -157,40 +150,81 @@ jobs:
           aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
           printf '### Published images\n- `%s`\n- `%s`\n' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
 
-  promote:
-    name: Promote immutable images to ${{ inputs.target }}
+  # These jobs are dormant on normal main pushes. They run only when promotion is
+  # manually dispatched, so staging/prod variables are optional until then.
+  resolve-promotion:
+    name: Resolve current dev images
     if: github.event_name == 'workflow_dispatch'
-    needs: validate
     runs-on: ubuntu-24.04
-    environment: ${{ inputs.target }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      manifest: ${{ steps.source.outputs.manifest }}
+      frontend: ${{ steps.source.outputs.frontend }}
+      backend: ${{ steps.source.outputs.backend }}
+    steps:
+      - name: Require main branch
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Image promotion must run from main.' >&2; exit 1; }
+      - name: Authenticate to the dev account
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Read and validate the current dev manifest
+        id: source
+        env:
+          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
+          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+        run: |
+          set -euo pipefail
+          actual="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong dev AWS account: $actual" >&2; exit 1; }
+          manifest="$(aws ssm get-parameter --name "$PARAMETER_NAME" --query Parameter.Value --output text)"
+          frontend="$(jq -er '.frontend' <<< "$manifest")"
+          backend="$(jq -er '.backend' <<< "$manifest")"
+          pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
+          [[ "$frontend" =~ $pattern ]]
+          [[ "$backend" =~ $pattern ]]
+          compact="$(jq -c . <<< "$manifest")"
+          echo "manifest=$compact" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+
+  promote:
+    name: Promote current dev images to ${{ inputs.target }}
+    if: github.event_name == 'workflow_dispatch'
+    needs: resolve-promotion
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Validate immutable references
+      - name: Validate optional target configuration
         env:
-          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
-          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          ROLE_ARN: ${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
+          ACCOUNT_ID: ${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
         run: |
           set -euo pipefail
-          pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
-          [[ "$FRONTEND_IMAGE" =~ $pattern ]]
-          [[ "$BACKEND_IMAGE" =~ $pattern ]]
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+          [[ -n "$ROLE_ARN" ]] || { echo 'The selected target role variable is not configured.' >&2; exit 1; }
+          [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo 'The selected target account ID variable is not configured.' >&2; exit 1; }
+      - name: Authenticate to the target account
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
         with:
-          role-to-assume: ${{ inputs.target == 'dev' && vars.AWS_ROLE_ARN_DEV || inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
+          role-to-assume: ${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Verify account and promote manifest
         env:
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
+          EXPECTED_ACCOUNT: ${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
           PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
-          FRONTEND_IMAGE: ${{ inputs.frontend_image }}
-          BACKEND_IMAGE: ${{ inputs.backend_image }}
+          IMAGE_MANIFEST: ${{ needs.resolve-promotion.outputs.manifest }}
+          FRONTEND_IMAGE: ${{ needs.resolve-promotion.outputs.frontend }}
+          BACKEND_IMAGE: ${{ needs.resolve-promotion.outputs.backend }}
         run: |
           set -euo pipefail
           actual="$(aws sts get-caller-identity --query Account --output text)"
           [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
-          manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
-          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
+          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$IMAGE_MANIFEST" --overwrite
           printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
-

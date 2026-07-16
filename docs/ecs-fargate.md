@@ -12,7 +12,6 @@ The service starts at one task in private subnets, registers frontend port 3000 
 
 ECS obtains exact images from the task definition, sends stdout to CloudWatch, attaches task ENIs to the ECS security group, and registers container ports with both target groups. Health checks occur inside each container and from the ALB.
 
-Common failures are `CannotPullContainerError` (private GHCR, bad digest, NAT/DNS), `ResourceInitializationError` (logs or IAM), health-check failures (wrong path/port/start period), and failure to register both containers (name/port mismatch). Inspect ECS service events, stopped reasons, target health descriptions, and both log groups. `aws ecs wait services-stable` is used after approved apply.
+Common failures are `CannotPullContainerError` (private GHCR, bad digest, NAT/DNS), `ResourceInitializationError` (logs or IAM), health-check failures (wrong path/port/start period), and failure to register both containers (name/port mismatch). Inspect ECS service events, stopped reasons, target health descriptions, and both log groups. `aws ecs wait services-stable` is used after apply.
 
 References: [Fargate task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-defs.html), [ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html), [deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
-
