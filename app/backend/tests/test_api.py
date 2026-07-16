@@ -43,4 +43,3 @@ def test_missing_todo_responses(client: TestClient) -> None:
     assert client.get("/api/todos/999").status_code == 404
     assert client.patch("/api/todos/999", json={"completed": True}).status_code == 404
     assert client.delete("/api/todos/999").status_code == 404
-

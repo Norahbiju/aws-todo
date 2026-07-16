@@ -111,4 +111,3 @@ def create_app(repository: InMemoryTodoRepository | None = None) -> FastAPI:
 
 
 app = create_app()
-

@@ -72,4 +72,3 @@ class InMemoryTodoRepository:
         async with self._lock:
             if self._todos.pop(todo_id, None) is None:
                 raise TodoNotFoundError(todo_id)
-

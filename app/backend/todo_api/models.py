@@ -50,4 +50,3 @@ class HealthResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
-
