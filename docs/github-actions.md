@@ -6,6 +6,8 @@
 
 Authorisation is layered: repository write access permits dispatch, workflow permissions control token scope, branch rules protect reviewed code, AWS OIDC trust restricts tokens to this repository's `main` branch, and IAM policies restrict API actions. GitHub Environments are not used. Only the dev variables are required now; configure staging and production variables and roles before selecting those targets.
 
+The verified dev account ID is pinned in these repository-specific workflows, avoiding a duplicate `AWS_ACCOUNT_ID_DEV` repository variable while retaining explicit wrong-account checks. Staging and production account IDs remain variable-driven.
+
 Actions are pinned to commit SHAs. Multi-line scripts use strict Bash mode. Required checks do not continue after failure. Deployment concurrency is serialised by target and never cancels an in-progress mutation.
 
 ## Trigger and verification boundaries
