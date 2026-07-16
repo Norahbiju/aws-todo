@@ -180,4 +180,4 @@ jobs:
           [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
           aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$IMAGE_MANIFEST" --overwrite
           printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
-#container-images.yml
+
