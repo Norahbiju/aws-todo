@@ -131,7 +131,9 @@ jobs:
           code=$?
           set -e
           [[ $code -eq 0 || $code -eq 2 ]] || exit "$code"
-          terraform show -no-color deploy-artifacts/plan.tfplan > deploy-artifacts/plan.txt
+          # Render from the Terragrunt target so Terraform can load the provider
+          # schema installed in that target's .terragrunt-cache directory.
+          terragrunt show --working-dir "infra/live/${TARGET}" -no-color "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan" > deploy-artifacts/plan.txt
           [[ $code -eq 0 ]] && status='No changes' || status='Changes present'
           { echo "### ${ACTION} plan for ${TARGET}: ${status}"; echo '<details><summary>Plan excerpt (full plan is in the artifact)</summary>'; echo; echo '```terraform'; head -n 250 deploy-artifacts/plan.txt; echo '```'; echo '</details>'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Create integrity metadata
@@ -232,6 +234,5 @@ jobs:
           else
             echo "### Destroy completed for ${TARGET}" >> "$GITHUB_STEP_SUMMARY"
           fi          
-
 
 

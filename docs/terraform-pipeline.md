@@ -18,7 +18,7 @@ flowchart LR
 
 Terraform detailed exit code 0 means successful/no changes, 2 means successful/changes, and anything else is failure. The scripts temporarily disable shell fail-fast only to capture that value, explicitly accept 0 or 2, and then restore strict mode. A plan needs current SSM image JSON and remote-state access.
 
-Manual plan/apply/destroy generates `plan.tfplan` plus full text and metadata. Artifact names include target, action, commit, and run ID; retention is three days. SHA-256 detects alteration. Metadata binds commit, target, expected account, region, action, workflow run, and tool versions. Plan and apply both run Ubuntu 24.04 with identical pinned versions.
+Manual plan/apply/destroy generates `plan.tfplan` plus full text and metadata. The text is rendered through the same Terragrunt target that created the binary plan, ensuring the pinned provider schema is available from its cache. Artifact names include target, action, commit, and run ID; retention is three days. SHA-256 detects alteration. Metadata binds commit, target, expected account, region, action, workflow run, and tool versions. Plan and apply both run Ubuntu 24.04 with identical pinned versions.
 
 For apply/destroy, a separate job checks out the same commit, downloads only the named artifact from the same run, verifies every field and hash, obtains fresh OIDC credentials, reinitialises the same backend, and invokes `terragrunt apply ... plan.tfplan`. It never creates another plan. Every operation requires main; destroy also requires exact text `DESTROY <target>`. GitHub Environments and approval gates are not used.
 
