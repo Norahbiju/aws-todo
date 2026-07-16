@@ -2,7 +2,7 @@
 
 ## Sequence
 
-The workflow has no pull-request trigger. On a main push it installs deterministic dependencies, lints, tests, builds the production frontend, validates backend import, builds both containers without pushing, and validates Compose. It then authenticates to GHCR with the scoped `GITHUB_TOKEN`, builds `linux/amd64` images with BuildKit cache, pushes `sha-<commit>`, captures registry digests, constructs digest references, assumes the dev OIDC role, verifies the account, and updates the dev JSON SSM parameter.
+The workflow has no pull-request trigger and does not run separate application test or lint steps. On a main push it authenticates to GHCR with the scoped `GITHUB_TOKEN`, builds the frontend and backend `linux/amd64` images, pushes immutable `sha-<commit>` tags, captures registry digests, constructs digest references, assumes the dev OIDC role, verifies the account, and updates the dev JSON SSM parameter. Any compilation or dependency failure encountered by a Docker build still fails publication.
 
 Optional staging/production promotion remains available through manual dispatch but is dormant during normal dev publication. It reads the current dev manifest and copies the exact immutable references after validating the selected account. Those account variables are needed only when their target is selected. GitHub Environments are not used.
 
