@@ -16,7 +16,7 @@ Grant all three deployment roles `s3:ListBucket` for `ecs-todo/*` plus object ge
 
 ## 3. GitHub OIDC roles
 
-Create the GitHub OIDC provider and one existing deployment role per AWS account. Trust `aud=sts.amazonaws.com` and the exact `repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main` subject described in [GitHub OIDC](github-oidc-aws.md). GitHub Environments are not used. For stronger production separation later, use distinct plan and deployment roles with narrowly scoped permissions.
+Create the GitHub OIDC provider and one existing deployment role per AWS account. Trust `aud=sts.amazonaws.com` and this repository's exact immutable subject: `repo:Norahbiju@262330368/aws-todo@1301448178:ref:refs/heads/main`. See [GitHub OIDC](github-oidc-aws.md) for the format. GitHub Environments are not used. For stronger production separation later, use distinct plan and deployment roles with narrowly scoped permissions.
 
 The deployment policy needs the shared backend, optional KMS, named SSM parameter, and project resource actions. The following is a policy shape, not a drop-in least-privilege final policy; replace placeholders, split plan and deploy roles if possible, apply resource-level constraints supported by each API, and refine with IAM Access Analyzer:
 

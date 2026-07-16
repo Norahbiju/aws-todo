@@ -32,13 +32,15 @@ Example main-branch trust statement (replace placeholders):
   "Condition": {
     "StringEquals": {
       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-      "token.actions.githubusercontent.com:sub": "repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main"
+      "token.actions.githubusercontent.com:sub": "repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:ref:refs/heads/main"
     }
   }
 }
 ```
 
-Every AWS-authenticated job is restricted to `main` and needs only `repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main`. GitHub Environments are not used. Staging and production roles need the same repository-and-main subject only when those optional targets are enabled. No `pull_request` subject is required.
+This repository uses GitHub's immutable subject format because it was created on July 15, 2026. Its exact subject is `repo:Norahbiju@262330368/aws-todo@1301448178:ref:refs/heads/main`. Every AWS-authenticated job is restricted to that `main` subject. GitHub Environments are not used. Staging and production roles need the same immutable repository-and-main subject only when those optional targets are enabled. No `pull_request` subject is required.
+
+Repositories that predate GitHub's immutable-subject rollout may still use `repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main`. Always configure IAM with the subject format GitHub reports for the repository; the two formats do not match each other.
 
 ## Permission policy and diagnosis
 
