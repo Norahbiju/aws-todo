@@ -15,7 +15,7 @@ Use the symptom table from top to bottom. Keep investigations read-only until th
 | GHCR package still private | Change both package visibilities to Public after initial publication, then confirm anonymous manifest access. Do not add a PAT to the task. |
 | ECS `CannotPullContainerError` | Check exact digest existence, public visibility, platform, DNS, private default route, NAT availability/EIP, and stopped-task detail. |
 | Private subnet has no working NAT | Confirm route-table association, `0.0.0.0/0` target, NAT `Available`, NAT public subnet route to IGW, and network ACLs. |
-| ECS task fails container health | Run the exact local health command, check runtime tool (`wget`/Python), port, startup time, process bind address, and container logs. |
+| ECS task fails container health | Run the exact local health command, confirm the guaranteed runtime (`node` for frontend, Python for backend), port, startup time, process bind address, and container logs. The frontend check intentionally uses Node's built-in HTTP client rather than an optional Alpine utility. |
 | ALB target remains unhealthy | Compare health path, matcher, target port, task/container mapping, ALB-to-ECS SG rules, grace period, and `describe-target-health` reason. |
 | Incorrect target-group port | Frontend is 3000 and backend 8000 in task port mapping, service attachment, SG rule, and target group. Fix code and apply a reviewed plan. |
 | Service cannot register both containers | Both names and ports must match task definition exactly; inspect ECS service events and ensure both are essential/healthy. |

@@ -46,7 +46,7 @@ resource "aws_ecs_task_definition" "this" {
         }
       }
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/health || exit 1"]
+        command     = ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
         interval    = 30
         timeout     = 5
         retries     = 3
@@ -117,4 +117,3 @@ resource "aws_ecs_service" "this" {
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.http, aws_lb_listener_rule.api]
 }
-
