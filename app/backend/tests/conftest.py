@@ -8,6 +8,7 @@ from todo_api.repository import InMemoryTodoRepository
 @pytest.fixture
 def client() -> TestClient:
     with TestClient(
-        create_app(InMemoryTodoRepository()), raise_server_exceptions=False
+        create_app(InMemoryTodoRepository()),
+        raise_server_exceptions=False,
     ) as client:
         yield client
