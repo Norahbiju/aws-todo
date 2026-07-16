@@ -10,7 +10,7 @@ The service starts at one task in private subnets, registers frontend port 3000 
 
 ## Connections, failures, and verification
 
-ECS obtains exact images from the task definition, sends stdout to CloudWatch, attaches task ENIs to the ECS security group, and registers container ports with both target groups. Health checks occur inside each container and from the ALB.
+ECS obtains exact images from the task definition, sends stdout to CloudWatch, attaches task ENIs to the ECS security group, and registers container ports with both target groups. The frontend is governed by the ALB `/health` check, which validates the complete load-balancer-to-task path. The backend also retains an in-container `/api/health` probe.
 
 Common failures are `CannotPullContainerError` (private GHCR, bad digest, NAT/DNS), `ResourceInitializationError` (logs or IAM), health-check failures (wrong path/port/start period), and failure to register both containers (name/port mismatch). Inspect ECS service events, stopped reasons, target health descriptions, and both log groups. `aws ecs wait services-stable` is used after apply.
 

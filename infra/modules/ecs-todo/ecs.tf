@@ -45,13 +45,6 @@ resource "aws_ecs_task_definition" "this" {
           "awslogs-stream-prefix" = "ecs"
         }
       }
-      healthCheck = {
-        command     = ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 20
-      }
     },
     {
       name         = "backend"
