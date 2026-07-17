@@ -4,9 +4,9 @@
 
 `container-images.yml` builds and publishes both images on main and updates dev without separate test/lint jobs; optional manual promotion can later copy the current dev manifest to staging or production. `terraform.yml` is workflow-dispatch-only and defaults to dev while retaining optional staging/prod targets. Neither workflow has a pull-request trigger. Missing optional account variables do not affect dev runs; selecting an unconfigured target produces a clear preflight failure.
 
-Authorisation is layered: repository write access permits dispatch, workflow permissions control token scope, branch rules protect reviewed code, AWS OIDC trust restricts tokens to this repository's `main` branch, and IAM policies restrict API actions. GitHub Environments are not used. Only the dev variables are required now; configure staging and production variables and roles before selecting those targets.
+Authorisation is layered: repository write access permits dispatch, workflow permissions control token scope, branch rules protect reviewed code, AWS OIDC trust restricts tokens to this repository's `main` branch, and IAM policies restrict API actions. GitHub Environments are not used. Deployment configuration is stored in repository variables; configure the corresponding account ID and role ARN before selecting each target.
 
-The verified dev account ID is pinned in these repository-specific workflows, avoiding a duplicate `AWS_ACCOUNT_ID_DEV` repository variable while retaining explicit wrong-account checks. Staging and production account IDs remain variable-driven.
+Dev, staging, and production account IDs are all repository variables and retain explicit wrong-account checks. Workflow-level `env` blocks do not store deployment configuration. Step-level `env` mappings safely pass repository-variable expressions to Bash, the AWS CLI, Terraform, and Terragrunt; they are ordinary process variables, not GitHub Environments.
 
 Actions are pinned to commit SHAs. Multi-line scripts use strict Bash mode. Required checks do not continue after failure. Deployment concurrency is serialised by target and never cancels an in-progress mutation.
 

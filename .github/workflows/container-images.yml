@@ -17,11 +17,6 @@ permissions:
   packages: write
   id-token: write
 
-env:
-  # Verified dev account. Keeping this in the workflow makes the safety check
-  # independent of a duplicate repository variable.
-  DEV_AWS_ACCOUNT_ID: "484632959006"
-
 jobs:
   publish:
     name: Publish immutable images
@@ -95,12 +90,14 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
       - name: Verify account and update SSM
         env:
-          EXPECTED_ACCOUNT: ${{ env.DEV_AWS_ACCOUNT_ID }}
+          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
           PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
           FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
           BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
         run: |
           set -euo pipefail
+          [[ "$EXPECTED_ACCOUNT" =~ ^[0-9]{12}$ ]] || { echo 'AWS_ACCOUNT_ID_DEV is not configured.' >&2; exit 1; }
+          [[ -n "$PARAMETER_NAME" ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured.' >&2; exit 1; }
           actual="$(aws sts get-caller-identity --query Account --output text)"
           [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
           manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
@@ -133,10 +130,12 @@ jobs:
       - name: Read and validate the current dev manifest
         id: source
         env:
-          EXPECTED_ACCOUNT: ${{ env.DEV_AWS_ACCOUNT_ID }}
+          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
           PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
         run: |
           set -euo pipefail
+          [[ "$EXPECTED_ACCOUNT" =~ ^[0-9]{12}$ ]] || { echo 'AWS_ACCOUNT_ID_DEV is not configured.' >&2; exit 1; }
+          [[ -n "$PARAMETER_NAME" ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured.' >&2; exit 1; }
           actual="$(aws sts get-caller-identity --query Account --output text)"
           [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong dev AWS account: $actual" >&2; exit 1; }
           manifest="$(aws ssm get-parameter --name "$PARAMETER_NAME" --query Parameter.Value --output text)"

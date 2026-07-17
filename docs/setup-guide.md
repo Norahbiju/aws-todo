@@ -46,7 +46,8 @@ Create these non-secret repository or organisation variables:
 | Variable | Value |
 |---|---|
 | `AWS_ROLE_ARN_DEV` | existing dev OIDC role ARN |
-| `AWS_REGION` | deployment region, for example `us-east-1` |
+| `AWS_ACCOUNT_ID_DEV` | 12-digit dev account ID |
+| `AWS_REGION` | deployment region, currently `ap-south-1` |
 | `TF_STATE_BUCKET` | shared S3 bucket name |
 | `TF_STATE_KMS_KEY_ARN` | KMS ARN or an empty value for bucket-default encryption |
 | `SSM_IMAGE_PARAMETER_NAME` | `/ecs-todo/container-images` |
@@ -62,13 +63,13 @@ Optional future variables, required only when their targets are selected:
 
 Role ARNs and account IDs are identifiers, not credentials, but follow organisational variable/secrets policy. Do not add AWS access-key secrets.
 
-The verified dev account ID `484632959006` is pinned in both workflows and does not require a GitHub variable. The Terraform workflow passes it to Terragrunt as `AWS_ACCOUNT_ID_DEV`. Optional staging and production account IDs remain repository variables.
+All account IDs and role ARNs are repository variables; neither workflow hard-codes an account. GitHub repository variables are mapped into step-level process environment variables only where Bash, the AWS CLI, Terraform, or Terragrunt must consume them. This runtime mapping is not a GitHub Environment and does not create environment-scoped configuration.
 
 No GitHub Environment is required. The workflows enforce `main` before AWS authentication or deployment. The optional workflow paths already exist, but staging and production variables and roles are not required until those targets are selected.
 
 ## 5. First publication and deployment
 
-1. Merge the implementation to main. The container workflow tests and publishes both SHA-tagged images.
+1. Merge the implementation to main. The container workflow builds and publishes both SHA-tagged images.
 2. Open each package's GitHub page and choose **Package settings → Change visibility → Public**. The first ECS pull will fail while private.
 3. Re-run the main image workflow after visibility is public. It assumes the dev role, verifies the dev account, and creates/updates the SSM JSON parameter.
 4. Inspect the summary and compare both GHCR digests with `aws ssm get-parameter --name /ecs-todo/container-images --query Parameter.Value --output text` under authorised read-only credentials.

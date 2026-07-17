@@ -4,7 +4,7 @@
 
 The workflow has no pull-request trigger and does not run separate application test or lint steps. On a main push it authenticates to GHCR with the scoped `GITHUB_TOKEN`, builds the frontend and backend `linux/amd64` images, pushes immutable `sha-<commit>` tags, captures registry digests, constructs digest references, assumes the dev OIDC role, verifies the account, and updates the dev JSON SSM parameter. Any compilation or dependency failure encountered by a Docker build still fails publication.
 
-The verified dev account ID is pinned in this repository-specific workflow, so container publication does not depend on `AWS_ACCOUNT_ID_DEV`. Terraform still uses that repository variable as an infrastructure provider input. Optional staging and production promotion continues to require the corresponding account-ID variables when selected.
+The workflow reads the dev role ARN, account ID, region, and SSM parameter name from GitHub repository variables. Optional staging and production promotion reads the corresponding role ARN and account-ID variables only when that target is selected. Repository variables are mapped to step environment variables only when a shell command needs them; GitHub Environments are not used.
 
 Optional staging/production promotion remains available through manual dispatch but is dormant during normal dev publication. It reads the current dev manifest and copies the exact immutable references after validating the selected account. Those account variables are needed only when their target is selected. GitHub Environments are not used.
 
