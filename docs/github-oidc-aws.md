@@ -44,7 +44,7 @@ Repositories that predate GitHub's immutable-subject rollout may still use `repo
 
 ## Permission policy and diagnosis
 
-The role needs S3 state/lock access, optional KMS access, SSM read, and only the EC2/VPC, ELBv2, ECS, IAM role/policy, CloudWatch Logs/alarms, and Application Auto Scaling actions represented by this module. Image jobs additionally need `ssm:PutParameter` on one named parameter. Restrict IAM role resources to the project prefix and require `iam:PassedToService=ecs-tasks.amazonaws.com` for `iam:PassRole`. Use IAM Access Analyzer and CloudTrail to refine the initial policy.
+The role needs S3 state/lock access, SSM read, and only the EC2/VPC, ELBv2, ECS, IAM role/policy, CloudWatch Logs/alarms, and Application Auto Scaling actions represented by this module. Image jobs additionally need `ssm:PutParameter` on one named parameter. Restrict IAM role resources to the project prefix and require `iam:PassedToService=ecs-tasks.amazonaws.com` for `iam:PassRole`. Use IAM Access Analyzer and CloudTrail to refine the initial policy.
 
 `Not authorized to perform sts:AssumeRoleWithWebIdentity` normally means the provider ARN, audience, subject, repository case, or branch differs from trust. Decode claims only with safe GitHub tooling; never print the full JWT. Each workflow immediately calls STS and compares the account ID, limiting wrong-role blast radius.
 

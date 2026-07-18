@@ -2,7 +2,7 @@
 
 ## Baseline cost drivers
 
-The dominant fixed cost is usually two NAT gateways per account, plus NAT data processing for GHCR pulls and API traffic. Other metered components are the Application Load Balancer and LCUs, Fargate vCPU/memory runtime, CloudWatch Logs ingestion/storage, Container Insights custom metrics, three alarms, public IPv4/EIPs, S3 state requests/storage, optional KMS requests, and internet or cross-account transfer.
+The dominant fixed cost is usually two NAT gateways per account, plus NAT data processing for GHCR pulls and API traffic. Other metered components are the Application Load Balancer and LCUs, Fargate vCPU/memory runtime, CloudWatch Logs ingestion/storage, Container Insights custom metrics, three alarms, public IPv4/EIPs, S3 state requests/storage, and internet or cross-account transfer.
 
 Three accounts multiply the baseline even when traffic is low. Prices vary by region and date, so use the [AWS Pricing Calculator](https://calculator.aws/) and current service pricing before deployment. Set budgets and anomaly detection in every account; tag costs by project/environment.
 

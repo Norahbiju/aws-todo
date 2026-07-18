@@ -54,7 +54,6 @@ jobs:
           export AWS_ACCOUNT_ID_PROD="000000000002"
           export AWS_REGION="us-east-1"
           export TF_STATE_BUCKET="static-validation-only"
-          export TF_STATE_KMS_KEY_ARN=""
           export SSM_IMAGE_PARAMETER_NAME="/ecs-todo/container-images"
           terraform fmt -check -recursive infra
           terraform -chdir=infra/modules/ecs-todo init -backend=false
@@ -136,7 +135,6 @@ jobs:
           export AWS_ACCOUNT_ID_PROD='${{ vars.AWS_ACCOUNT_ID_PROD }}'
           export AWS_REGION='${{ vars.AWS_REGION }}'
           export TF_STATE_BUCKET='${{ vars.TF_STATE_BUCKET }}'
-          export TF_STATE_KMS_KEY_ARN='${{ vars.TF_STATE_KMS_KEY_ARN }}'
           export SSM_IMAGE_PARAMETER_NAME='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
           target='${{ inputs.target }}'
           action='${{ inputs.action }}'
@@ -258,7 +256,6 @@ jobs:
           export AWS_ACCOUNT_ID_PROD='${{ vars.AWS_ACCOUNT_ID_PROD }}'
           export AWS_REGION='${{ vars.AWS_REGION }}'
           export TF_STATE_BUCKET='${{ vars.TF_STATE_BUCKET }}'
-          export TF_STATE_KMS_KEY_ARN='${{ vars.TF_STATE_KMS_KEY_ARN }}'
           export SSM_IMAGE_PARAMETER_NAME='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
           target='${{ inputs.target }}'
           action='${{ inputs.action }}'

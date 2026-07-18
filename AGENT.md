@@ -847,7 +847,7 @@ Configure:
 * Unique state key per account.
 * Native S3 state locking using `use_lockfile = true`.
 * S3 bucket versioning as a documented prerequisite.
-* Optional customer-managed KMS key support if the existing state bucket uses one.
+* S3-managed AES-256 encryption for state objects.
 
 Example state-key pattern:
 
@@ -862,7 +862,6 @@ Document the required shared-bucket access for the three existing GitHub OIDC ro
 If the bucket is in a fourth shared-services account, document:
 
 * Required bucket policy.
-* Required KMS key policy when using SSE-KMS.
 * Cross-account access.
 * State-object permissions.
 * Lockfile object permissions.
@@ -945,7 +944,6 @@ AWS_ACCOUNT_ID_PROD
 
 AWS_REGION
 TF_STATE_BUCKET
-TF_STATE_KMS_KEY_ARN
 SSM_IMAGE_PARAMETER_NAME
 ```
 
@@ -1439,13 +1437,12 @@ Create a complete setup guide covering:
 13. S3 versioning.
 14. S3 state locking.
 15. Cross-account bucket policy.
-16. KMS key policy if applicable.
-17. First container-image publication.
-18. First SSM parameter creation.
-19. First dev Terraform plan.
-20. First approved dev apply.
-21. Promoting the same image digests to staging and production.
-22. Safely destroying an environment.
+16. First container-image publication.
+17. First SSM parameter creation.
+18. First dev Terraform plan.
+19. First approved dev apply.
+20. Promoting the same image digests to staging and production.
+21. Safely destroying an environment.
 
 Do not instruct the user to bypass the pipeline.
 
@@ -1491,7 +1488,6 @@ Include troubleshooting for at least:
 * OIDC `sub` condition mismatch.
 * Wrong AWS account assumed.
 * Shared S3 bucket `AccessDenied`.
-* KMS decrypt or encrypt failure.
 * Terraform state lock failure.
 * Missing SSM image parameter.
 * Invalid JSON in the SSM image parameter.

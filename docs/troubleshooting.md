@@ -8,7 +8,6 @@ Use the symptom table from top to bottom. Keep investigations read-only until th
 | OIDC `sub` mismatch | All authenticated jobs use `ref:refs/heads/main`; no environment or PR subject is used. Names and repository owner casing must match policy. |
 | Wrong AWS account assumed | Variable maps to the wrong role or role trust crosses accounts. The workflow stops after `sts get-caller-identity`; correct variables/trust, never bypass the check. |
 | Shared S3 `AccessDenied` | Inspect role, bucket policy, SCP, permissions boundary, object prefix, and TLS condition. Confirm the environment-specific state and `.tflock` ARNs. |
-| KMS encrypt/decrypt failure | IAM and KMS key policy must both allow the role, normally via S3, and region/key ARN must match. |
 | Terraform state lock failure | Another run may own the lock. Check Actions concurrency and lock metadata; wait or use an authorised force-unlock only after proving no active writer. Never use `-lock=false`. |
 | Missing SSM image parameter | Run main image publication for dev. Confirm the parameter name and region. Terraform intentionally has no fallback. |
 | Invalid SSM JSON | Read the value without logging it publicly; validate with `jq`. It needs `frontend` and `backend` digest strings. Re-run the image workflow. |

@@ -10,7 +10,7 @@ terraform {
 inputs = {
   environment                   = "dev"
   expected_account_id           = get_env("AWS_ACCOUNT_ID_DEV")
-  image_manifest_parameter_name = get_env("SSM_IMAGE_PARAMETER_NAME", "/ecs-todo/container-images")
+  image_manifest_parameter_name = get_env("SSM_IMAGE_PARAMETER_NAME")
   vpc_cidr                      = "10.10.0.0/16"
   public_subnet_cidrs           = ["10.10.0.0/24", "10.10.1.0/24"]
   private_subnet_cidrs          = ["10.10.10.0/24", "10.10.11.0/24"]

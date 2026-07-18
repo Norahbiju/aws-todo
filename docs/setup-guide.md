@@ -10,15 +10,15 @@ Protect main using a ruleset: require PR review, conversation resolution, and CO
 
 ## 2. Shared state bucket
 
-In the designated shared-services or target account, create `<TF_STATE_BUCKET>` outside this module. Enable Block Public Access, versioning, default SSE-S3 or SSE-KMS encryption, and TLS-only bucket access. Do not configure object lifecycle to delete current state or fresh noncurrent versions.
+In the designated shared-services or target account, create `<TF_STATE_BUCKET>` outside this module. Enable Block Public Access, versioning, default SSE-S3 encryption, and TLS-only bucket access. Do not configure object lifecycle to delete current state or fresh noncurrent versions.
 
-Grant all three deployment roles `s3:ListBucket` for `ecs-todo/*` plus object get/put/delete on `ecs-todo/*/terraform.tfstate` and `.tflock`. Scope each role further to its own account alias when possible. If using `<TF_STATE_KMS_KEY_ARN>`, the role policy and KMS key policy must allow encrypt/decrypt/data-key/describe through S3 for this bucket. Test with read-only `aws s3api head-bucket` and a controlled backend init, not an apply.
+Grant all three deployment roles `s3:ListBucket` for `ecs-todo/*` plus object get/put/delete on `ecs-todo/*/terraform.tfstate` and `.tflock`. Scope each role further to its own account alias when possible. Test with read-only `aws s3api head-bucket` and a controlled backend init, not an apply.
 
 ## 3. GitHub OIDC roles
 
 Create the GitHub OIDC provider and one existing deployment role per AWS account. Trust `aud=sts.amazonaws.com` and this repository's exact immutable subject: `repo:Norahbiju@262330368/aws-todo@1301448178:ref:refs/heads/main`. See [GitHub OIDC](github-oidc-aws.md) for the format. GitHub Environments are not used. For stronger production separation later, use distinct plan and deployment roles with narrowly scoped permissions.
 
-The deployment policy needs the shared backend, optional KMS, named SSM parameter, and project resource actions. The following is a policy shape, not a drop-in least-privilege final policy; replace placeholders, split plan and deploy roles if possible, apply resource-level constraints supported by each API, and refine with IAM Access Analyzer:
+The deployment policy needs the shared backend, named SSM parameter, and project resource actions. The following is a policy shape, not a drop-in least-privilege final policy; replace placeholders, split plan and deploy roles if possible, apply resource-level constraints supported by each API, and refine with IAM Access Analyzer:
 
 ```json
 {
@@ -48,7 +48,6 @@ Create these non-secret repository or organisation variables:
 | `AWS_ROLE_ARN_DEV` | existing dev OIDC role ARN |
 | `AWS_REGION` | deployment region, currently `ap-south-1` |
 | `TF_STATE_BUCKET` | shared S3 bucket name |
-| `TF_STATE_KMS_KEY_ARN` | KMS ARN or an empty value for bucket-default encryption |
 | `SSM_IMAGE_PARAMETER_NAME` | `/ecs-todo/container-images` |
 
 Optional future variables, required only when their targets are selected:
