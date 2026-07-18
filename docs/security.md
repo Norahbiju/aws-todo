@@ -6,7 +6,7 @@ Network controls place only the ALB in public subnets. Tasks have no public IP, 
 
 Identity controls use short-lived GitHub OIDC sessions, account-ID checks, provider allowlisting, main-branch restrictions, repository rules, and least-privilege roles. No AWS key, PAT, OIDC token, or Terraform state is committed or transferred between jobs. ECS execution and task roles are distinct and minimal.
 
-Supply-chain controls use deterministic dependency locks, multi-stage non-root images, immutable Git SHAs and registry digests, public anonymous GHCR pulls, commit-pinned Actions, pinned/checksummed Terraform tooling, saved-plan hashes, and same-run metadata. Run dependency scanning, secret scanning, Dependabot/Renovate, container scanning, and CodeQL in a real repository.
+Supply-chain controls use deterministic dependency locks, multi-stage non-root images, immutable Git SHAs and registry digests, public anonymous GHCR pulls, explicitly versioned Actions, pinned/checksummed Terraform tooling, saved-plan hashes, and same-run metadata. Run dependency scanning, secret scanning, Dependabot/Renovate, container scanning, and CodeQL in a real repository.
 
 ## Governance recommendations
 

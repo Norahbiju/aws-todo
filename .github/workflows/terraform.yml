@@ -1,232 +1,283 @@
-name: Terraform
+name: Plan and Deploy AWS Infrastructure
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: Infrastructure operation
+        description: Choose whether to preview, deploy, or remove infrastructure
         type: choice
         options: [plan, apply, destroy]
         required: true
       target:
-        description: AWS account alias (staging/prod require their optional variables)
+        description: Choose the AWS account to manage
         type: choice
         options: [dev, staging, prod]
         default: dev
         required: true
       destroy_confirmation:
-        description: For destroy, enter DESTROY followed by the target (for example DESTROY dev)
+        description: For destroy, enter DESTROY followed by the target, such as DESTROY dev
         type: string
         required: false
 
+env:
+  AWS_ACCOUNT_ID_DEV: "484632959006"
+
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  validate:
-    name: Static IaC validation
+  validate_configuration:
+    name: Check the infrastructure configuration
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_version: "1.15.5"
-          terraform_wrapper: false
-      - name: Install pinned Terragrunt
-        run: |
-          set -euo pipefail
-          curl -fsSLo /tmp/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v1.0.4/terragrunt_linux_amd64"
-          echo "387509aa15d3f38a93d0888ace2bd67c3e5eea841e1f4d585ea2174d566f35e9  /tmp/terragrunt" | sha256sum --check
-          sudo install /tmp/terragrunt /usr/local/bin/terragrunt
-      - name: Format and validate module
-        env:
-          # Dummy values allow syntax validation before optional account variables exist.
-          AWS_ACCOUNT_ID_DEV: "000000000000"
-          AWS_ACCOUNT_ID_STAGING: "000000000001"
-          AWS_ACCOUNT_ID_PROD: "000000000002"
-          AWS_REGION: us-east-1
-          TF_STATE_BUCKET: static-validation-only
-          TF_STATE_KMS_KEY_ARN: ""
-          SSM_IMAGE_PARAMETER_NAME: /ecs-todo/container-images
-        run: |
-          set -euo pipefail
-          terraform fmt -check -recursive infra
-          terraform -chdir=infra/modules/ecs-todo init -backend=false
-          terraform -chdir=infra/modules/ecs-todo validate
-          terragrunt hcl validate --working-dir infra/live
-  manual-plan:
-    name: Saved ${{ inputs.action }} plan (${{ inputs.target }})
-    if: github.event_name == 'workflow_dispatch'
-    needs: validate
-    runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
-    concurrency:
-      group: terraform-deploy-${{ inputs.target }}
-      cancel-in-progress: false
-    outputs:
-      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Validate manual safety inputs
-        env:
-          ACTION: ${{ inputs.action }}
-          TARGET: ${{ inputs.target }}
-          CONFIRMATION: ${{ inputs.destroy_confirmation }}
-          TARGET_ROLE_ARN: ${{ inputs.target == 'dev' && vars.AWS_ROLE_ARN_DEV || inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
-          TARGET_ACCOUNT_ID: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF" != refs/heads/main ]]; then echo 'Terraform operations must run from main.' >&2; exit 1; fi
-          if [[ "$ACTION" == destroy && "$CONFIRMATION" != "DESTROY $TARGET" ]]; then echo 'Destroy confirmation does not match.' >&2; exit 1; fi
-          [[ -n "$TARGET_ROLE_ARN" ]] || { echo "AWS role variable for $TARGET is not configured." >&2; exit 1; }
-          [[ "$TARGET_ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo "AWS account ID variable for $TARGET is not configured." >&2; exit 1; }
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
         with:
           terraform_version: "1.15.5"
           terraform_wrapper: false
       - name: Install Terragrunt
+        shell: bash
         run: |
           set -euo pipefail
           curl -fsSLo /tmp/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v1.0.4/terragrunt_linux_amd64"
           echo "387509aa15d3f38a93d0888ace2bd67c3e5eea841e1f4d585ea2174d566f35e9  /tmp/terragrunt" | sha256sum --check
           sudo install /tmp/terragrunt /usr/local/bin/terragrunt
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+      - name: Check Terraform formatting and validity
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AWS_ACCOUNT_ID_DEV="000000000000"
+          export AWS_ACCOUNT_ID_STAGING="000000000001"
+          export AWS_ACCOUNT_ID_PROD="000000000002"
+          export AWS_REGION="us-east-1"
+          export TF_STATE_BUCKET="static-validation-only"
+          export TF_STATE_KMS_KEY_ARN=""
+          export SSM_IMAGE_PARAMETER_NAME="/ecs-todo/container-images"
+          terraform fmt -check -recursive infra
+          terraform -chdir=infra/modules/ecs-todo init -backend=false
+          terraform -chdir=infra/modules/ecs-todo validate
+          terragrunt hcl validate --working-dir infra/live
+
+  create_plan:
+    name: Prepare the ${{ inputs.action }} plan for ${{ inputs.target }}
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate_configuration
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: terraform-deploy-${{ inputs.target }}
+      cancel-in-progress: false
+    outputs:
+      artifact_name: ${{ steps.plan_details.outputs.artifact_name }}
+    steps:
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
+      - name: Confirm the workflow is running from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Infrastructure operations must run from main.' >&2; exit 1; }
+      - name: Reject an incorrect destroy confirmation
+        if: inputs.action == 'destroy' && inputs.destroy_confirmation != format('DESTROY {0}', inputs.target)
+        shell: bash
+        run: |
+          echo 'Destroy confirmation does not match the selected target.' >&2
+          exit 1
+      - name: Check the selected account and repository variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='${{ inputs.target }}'
+          region='${{ vars.AWS_REGION }}'
+          state_bucket='${{ vars.TF_STATE_BUCKET }}'
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          if [[ "$target" == dev ]]; then
+            account_id="$AWS_ACCOUNT_ID_DEV"
+            role_arn='${{ vars.AWS_ROLE_ARN_DEV }}'
+          elif [[ "$target" == staging ]]; then
+            account_id='${{ vars.AWS_ACCOUNT_ID_STAGING }}'
+            role_arn='${{ vars.AWS_ROLE_ARN_STAGING }}'
+          else
+            account_id='${{ vars.AWS_ACCOUNT_ID_PROD }}'
+            role_arn='${{ vars.AWS_ROLE_ARN_PROD }}'
+          fi
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "The account ID for $target is not configured correctly." >&2; exit 1; }
+          [[ "$role_arn" == "arn:aws:iam::${account_id}:role/"* ]] || { echo "The AWS role for $target is missing or belongs to the wrong account." >&2; exit 1; }
+          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
+          [[ "$state_bucket" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo 'TF_STATE_BUCKET is not configured correctly.' >&2; exit 1; }
+          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
+        with:
+          terraform_version: "1.15.5"
+          terraform_wrapper: false
+      - name: Install Terragrunt
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v1.0.4/terragrunt_linux_amd64"
+          echo "387509aa15d3f38a93d0888ace2bd67c3e5eea841e1f4d585ea2174d566f35e9  /tmp/terragrunt" | sha256sum --check
+          sudo install /tmp/terragrunt /usr/local/bin/terragrunt
+      - name: Sign in to the selected AWS account
+        uses: aws-actions/configure-aws-credentials@v4.2.1
         with:
           role-to-assume: ${{ inputs.target == 'dev' && vars.AWS_ROLE_ARN_DEV || inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Generate saved plan
-        id: plan
-        env:
-          TARGET: ${{ inputs.target }}
-          ACTION: ${{ inputs.action }}
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_ACCOUNT_ID_DEV: ${{ vars.AWS_ACCOUNT_ID_DEV }}
-          AWS_ACCOUNT_ID_STAGING: ${{ vars.AWS_ACCOUNT_ID_STAGING }}
-          AWS_ACCOUNT_ID_PROD: ${{ vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
-          SSM_IMAGE_PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+      - name: Create and display the infrastructure plan
+        id: create_infrastructure_plan
+        shell: bash
         run: |
           set -euo pipefail
-          export TF_IN_AUTOMATION=true TF_INPUT=false
-          [[ -n "$AWS_REGION" ]] || { echo 'AWS_REGION is not configured.' >&2; exit 1; }
-          [[ -n "$TF_STATE_BUCKET" ]] || { echo 'TF_STATE_BUCKET is not configured.' >&2; exit 1; }
-          [[ -n "$SSM_IMAGE_PARAMETER_NAME" ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured.' >&2; exit 1; }
-          actual="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
+          export TF_IN_AUTOMATION="true"
+          export TF_INPUT="false"
+          export AWS_ACCOUNT_ID_STAGING='${{ vars.AWS_ACCOUNT_ID_STAGING }}'
+          export AWS_ACCOUNT_ID_PROD='${{ vars.AWS_ACCOUNT_ID_PROD }}'
+          export AWS_REGION='${{ vars.AWS_REGION }}'
+          export TF_STATE_BUCKET='${{ vars.TF_STATE_BUCKET }}'
+          export TF_STATE_KMS_KEY_ARN='${{ vars.TF_STATE_KMS_KEY_ARN }}'
+          export SSM_IMAGE_PARAMETER_NAME='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          target='${{ inputs.target }}'
+          action='${{ inputs.action }}'
+          if [[ "$target" == dev ]]; then
+            expected_account="$AWS_ACCOUNT_ID_DEV"
+          elif [[ "$target" == staging ]]; then
+            expected_account="$AWS_ACCOUNT_ID_STAGING"
+          else
+            expected_account="$AWS_ACCOUNT_ID_PROD"
+          fi
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual_account" == "$expected_account" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
           aws ssm get-parameter --name "$SSM_IMAGE_PARAMETER_NAME" --query Parameter.Value --output text | jq -e '.frontend and .backend' >/dev/null
           mkdir -p deploy-artifacts
           flags=()
-          [[ "$ACTION" == destroy ]] && flags=(-destroy)
+          [[ "$action" == destroy ]] && flags=(-destroy)
           set +e
-          terragrunt plan --working-dir "infra/live/${TARGET}" -lock-timeout=10m -detailed-exitcode "${flags[@]}" -out="$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
+          terragrunt plan --working-dir "infra/live/${target}" -lock-timeout=10m -detailed-exitcode "${flags[@]}" -out="$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
           code=$?
           set -e
           [[ $code -eq 0 || $code -eq 2 ]] || exit "$code"
-          # Render from the Terragrunt target so Terraform can load the provider
-          # schema installed in that target's .terragrunt-cache directory.
-          terragrunt show --working-dir "infra/live/${TARGET}" -no-color "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan" > deploy-artifacts/plan.txt
+          terragrunt show --working-dir "infra/live/${target}" -no-color "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan" > deploy-artifacts/plan.txt
           [[ $code -eq 0 ]] && status='No changes' || status='Changes present'
-          { echo "### ${ACTION} plan for ${TARGET}: ${status}"; echo '<details><summary>Plan excerpt (full plan is in the artifact)</summary>'; echo; echo '```terraform'; head -n 250 deploy-artifacts/plan.txt; echo '```'; echo '</details>'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: Create integrity metadata
-        id: metadata
-        env:
-          TARGET: ${{ inputs.target }}
-          ACTION: ${{ inputs.action }}
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
+          { echo "### ${action} plan for ${target}: ${status}"; echo '<details><summary>Plan excerpt (full plan is in the artifact)</summary>'; echo; echo '```terraform'; head -n 250 deploy-artifacts/plan.txt; echo '```'; echo '</details>'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Record the plan identity and checksum
+        id: plan_details
+        shell: bash
         run: |
           set -euo pipefail
+          target='${{ inputs.target }}'
+          action='${{ inputs.action }}'
+          region='${{ vars.AWS_REGION }}'
+          if [[ "$target" == dev ]]; then
+            expected_account="$AWS_ACCOUNT_ID_DEV"
+          elif [[ "$target" == staging ]]; then
+            expected_account='${{ vars.AWS_ACCOUNT_ID_STAGING }}'
+          else
+            expected_account='${{ vars.AWS_ACCOUNT_ID_PROD }}'
+          fi
           hash="$(sha256sum deploy-artifacts/plan.tfplan | awk '{print $1}')"
-          jq -n --arg commit "$GITHUB_SHA" --arg target "$TARGET" --arg account "$EXPECTED_ACCOUNT" --arg region "$AWS_REGION" --arg action "$ACTION" --arg run_id "$GITHUB_RUN_ID" --arg terraform "1.15.5" --arg terragrunt "1.0.4" --arg sha256 "$hash" '{commit:$commit,target:$target,expected_account_id:$account,region:$region,action:$action,workflow_run_id:$run_id,terraform_version:$terraform,terragrunt_version:$terragrunt,plan_sha256:$sha256}' > deploy-artifacts/metadata.json
-          artifact="tf-${TARGET}-${ACTION}-${GITHUB_SHA}-${GITHUB_RUN_ID}"
+          jq -n --arg commit "$GITHUB_SHA" --arg target "$target" --arg account "$expected_account" --arg region "$region" --arg action "$action" --arg run_id "$GITHUB_RUN_ID" --arg terraform "1.15.5" --arg terragrunt "1.0.4" --arg sha256 "$hash" '{commit:$commit,target:$target,expected_account_id:$account,region:$region,action:$action,workflow_run_id:$run_id,terraform_version:$terraform,terragrunt_version:$terragrunt,plan_sha256:$sha256}' > deploy-artifacts/metadata.json
+          artifact="tf-${target}-${action}-${GITHUB_SHA}-${GITHUB_RUN_ID}"
           echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload the plan for the deployment job
+        uses: actions/upload-artifact@v4.6.2
         with:
-          name: ${{ steps.metadata.outputs.artifact_name }}
+          name: ${{ steps.plan_details.outputs.artifact_name }}
           path: deploy-artifacts/
           retention-days: 3
           if-no-files-found: error
 
-  deploy-exact-plan:
-    name: Exact-plan ${{ inputs.action }} (${{ inputs.target }})
+  execute_plan:
+    name: Run the approved ${{ inputs.action }} plan for ${{ inputs.target }}
     if: github.event_name == 'workflow_dispatch' && (inputs.action == 'apply' || inputs.action == 'destroy')
-    needs: manual-plan
+    needs: create_plan
     runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
     concurrency:
       group: terraform-deploy-${{ inputs.target }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download the exact repository revision
+        uses: actions/checkout@v4.2.2
         with:
           ref: ${{ github.sha }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download the saved infrastructure plan
+        uses: actions/download-artifact@v4.3.0
         with:
-          name: ${{ needs.manual-plan.outputs.artifact_name }}
+          name: ${{ needs.create_plan.outputs.artifact_name }}
           path: deploy-artifacts
-      - name: Verify artifact metadata and hash
-        env:
-          TARGET: ${{ inputs.target }}
-          ACTION: ${{ inputs.action }}
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
+      - name: Verify the saved plan has not changed
+        shell: bash
         run: |
           set -euo pipefail
+          target='${{ inputs.target }}'
+          action='${{ inputs.action }}'
+          region='${{ vars.AWS_REGION }}'
+          if [[ "$target" == dev ]]; then
+            expected_account="$AWS_ACCOUNT_ID_DEV"
+          elif [[ "$target" == staging ]]; then
+            expected_account='${{ vars.AWS_ACCOUNT_ID_STAGING }}'
+          else
+            expected_account='${{ vars.AWS_ACCOUNT_ID_PROD }}'
+          fi
           test "$(jq -r .commit deploy-artifacts/metadata.json)" = "$GITHUB_SHA"
-          test "$(jq -r .target deploy-artifacts/metadata.json)" = "$TARGET"
-          test "$(jq -r .expected_account_id deploy-artifacts/metadata.json)" = "$EXPECTED_ACCOUNT"
-          test "$(jq -r .region deploy-artifacts/metadata.json)" = "$AWS_REGION"
-          test "$(jq -r .action deploy-artifacts/metadata.json)" = "$ACTION"
+          test "$(jq -r .target deploy-artifacts/metadata.json)" = "$target"
+          test "$(jq -r .expected_account_id deploy-artifacts/metadata.json)" = "$expected_account"
+          test "$(jq -r .region deploy-artifacts/metadata.json)" = "$region"
+          test "$(jq -r .action deploy-artifacts/metadata.json)" = "$action"
           test "$(jq -r .workflow_run_id deploy-artifacts/metadata.json)" = "$GITHUB_RUN_ID"
           test "$(jq -r .terraform_version deploy-artifacts/metadata.json)" = "1.15.5"
           test "$(jq -r .terragrunt_version deploy-artifacts/metadata.json)" = "1.0.4"
           expected_hash="$(jq -r .plan_sha256 deploy-artifacts/metadata.json)"
           actual_hash="$(sha256sum deploy-artifacts/plan.tfplan | awk '{print $1}')"
           test "$actual_hash" = "$expected_hash"
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3.1.2
         with:
           terraform_version: "1.15.5"
           terraform_wrapper: false
       - name: Install Terragrunt
+        shell: bash
         run: |
           set -euo pipefail
           curl -fsSLo /tmp/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v1.0.4/terragrunt_linux_amd64"
           echo "387509aa15d3f38a93d0888ace2bd67c3e5eea841e1f4d585ea2174d566f35e9  /tmp/terragrunt" | sha256sum --check
           sudo install /tmp/terragrunt /usr/local/bin/terragrunt
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+      - name: Sign in to the selected AWS account
+        uses: aws-actions/configure-aws-credentials@v4.2.1
         with:
           role-to-assume: ${{ inputs.target == 'dev' && vars.AWS_ROLE_ARN_DEV || inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Apply the exact reviewed plan
-        env:
-          TARGET: ${{ inputs.target }}
-          ACTION: ${{ inputs.action }}
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'dev' && vars.AWS_ACCOUNT_ID_DEV || inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_ACCOUNT_ID_DEV: ${{ vars.AWS_ACCOUNT_ID_DEV }}
-          AWS_ACCOUNT_ID_STAGING: ${{ vars.AWS_ACCOUNT_ID_STAGING }}
-          AWS_ACCOUNT_ID_PROD: ${{ vars.AWS_ACCOUNT_ID_PROD }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_KMS_KEY_ARN: ${{ vars.TF_STATE_KMS_KEY_ARN }}
-          SSM_IMAGE_PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+      - name: Apply the saved infrastructure plan
+        shell: bash
         run: |
           set -euo pipefail
-          export TF_IN_AUTOMATION=true TF_INPUT=false
-          actual="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
-          terragrunt init --working-dir "infra/live/${TARGET}"
-          terragrunt apply --working-dir "infra/live/${TARGET}" -lock-timeout=10m -auto-approve "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
-          if [[ "$ACTION" == apply ]]; then
-            cluster="$(terragrunt output --working-dir "infra/live/${TARGET}" -raw ecs_cluster_name)"
-            service="$(terragrunt output --working-dir "infra/live/${TARGET}" -raw ecs_service_name)"
-            aws ecs wait services-stable --cluster "$cluster" --services "$service"
-            { echo "### Deployment outputs"; echo '```json'; terragrunt output --working-dir "infra/live/${TARGET}" -json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          export TF_IN_AUTOMATION="true"
+          export TF_INPUT="false"
+          export AWS_ACCOUNT_ID_STAGING='${{ vars.AWS_ACCOUNT_ID_STAGING }}'
+          export AWS_ACCOUNT_ID_PROD='${{ vars.AWS_ACCOUNT_ID_PROD }}'
+          export AWS_REGION='${{ vars.AWS_REGION }}'
+          export TF_STATE_BUCKET='${{ vars.TF_STATE_BUCKET }}'
+          export TF_STATE_KMS_KEY_ARN='${{ vars.TF_STATE_KMS_KEY_ARN }}'
+          export SSM_IMAGE_PARAMETER_NAME='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          target='${{ inputs.target }}'
+          action='${{ inputs.action }}'
+          if [[ "$target" == dev ]]; then
+            expected_account="$AWS_ACCOUNT_ID_DEV"
+          elif [[ "$target" == staging ]]; then
+            expected_account="$AWS_ACCOUNT_ID_STAGING"
           else
-            echo "### Destroy completed for ${TARGET}" >> "$GITHUB_STEP_SUMMARY"
+            expected_account="$AWS_ACCOUNT_ID_PROD"
+          fi
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual_account" == "$expected_account" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
+          terragrunt init --working-dir "infra/live/${target}"
+          terragrunt apply --working-dir "infra/live/${target}" -lock-timeout=10m -auto-approve "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
+          if [[ "$action" == apply ]]; then
+            cluster="$(terragrunt output --working-dir "infra/live/${target}" -raw ecs_cluster_name)"
+            service="$(terragrunt output --working-dir "infra/live/${target}" -raw ecs_service_name)"
+            aws ecs wait services-stable --cluster "$cluster" --services "$service"
+            { echo '### Deployment outputs'; echo '```json'; terragrunt output --working-dir "infra/live/${target}" -json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Destroy completed for ${target}" >> "$GITHUB_STEP_SUMMARY"
           fi

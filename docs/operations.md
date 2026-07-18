@@ -14,7 +14,7 @@ Rollback application content by reverting main to known-good application code, p
 
 ## Routine maintenance
 
-Regularly update dependencies and action SHAs through reviewed PRs, scan images, review IAM Access Analyzer/CloudTrail, inspect state versions and locks, audit package visibility, review budgets, validate alarms, and run controlled restore/rollback exercises. Prune neither plan artifacts nor state versions outside policy.
+Regularly update dependencies and action versions through reviewed PRs, scan images, review IAM Access Analyzer/CloudTrail, inspect state versions and locks, audit package visibility, review budgets, validate alarms, and run controlled restore/rollback exercises. Prune neither plan artifacts nor state versions outside policy.
 
 For scaling diagnostics inspect average CPU and scaling activity; remember data is intentionally inconsistent across tasks. For planned deletion use the exact destroy procedure in the setup guide. Local apply, targeted manual resource deletion, mutable tags, `-lock=false`, and console drift are prohibited.
 

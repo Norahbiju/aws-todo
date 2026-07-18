@@ -1,16 +1,18 @@
-name: Container images
+name: Build and Promote Container Images
 
 on:
   push:
     branches: [main]
-  # Optional future promotion path. Missing staging/prod variables do not affect main pushes.
   workflow_dispatch:
     inputs:
       target:
-        description: Optional account that receives the current dev image manifest
+        description: Choose where to promote the current development release
         type: choice
         options: [staging, prod]
         required: true
+
+env:
+  AWS_ACCOUNT_ID_DEV: "484632959006"
 
 permissions:
   contents: read
@@ -18,127 +20,138 @@ permissions:
   id-token: write
 
 jobs:
-  publish:
-    name: Publish immutable images
+  build_images:
+    name: Build and publish frontend and backend images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     outputs:
-      frontend_image: ${{ steps.refs.outputs.frontend }}
-      backend_image: ${{ steps.refs.outputs.backend }}
+      frontend_image: ${{ steps.image_references.outputs.frontend }}
+      backend_image: ${{ steps.image_references.outputs.backend }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
-      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
+      - name: Prepare the Docker image builder
+        uses: docker/setup-buildx-action@v3.11.1
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Derive lowercase image names
-        id: names
+      - name: Create the container image names
+        id: image_names
         shell: bash
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
           echo "frontend=ghcr.io/${repository}-frontend" >> "$GITHUB_OUTPUT"
           echo "backend=ghcr.io/${repository}-backend" >> "$GITHUB_OUTPUT"
-      - name: Build and push frontend
-        id: frontend
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+      - name: Build and publish the frontend image
+        id: frontend_build
+        uses: docker/build-push-action@v6.18.0
         with:
           context: app/frontend
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.names.outputs.frontend }}:sha-${{ github.sha }}
+          tags: ${{ steps.image_names.outputs.frontend }}:sha-${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
-      - name: Build and push backend
-        id: backend
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+      - name: Build and publish the backend image
+        id: backend_build
+        uses: docker/build-push-action@v6.18.0
         with:
           context: app/backend
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.names.outputs.backend }}:sha-${{ github.sha }}
+          tags: ${{ steps.image_names.outputs.backend }}:sha-${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
-      - name: Capture digest-pinned references
-        id: refs
+      - name: Record the exact published image versions
+        id: image_references
         shell: bash
         run: |
           set -euo pipefail
-          frontend='${{ steps.names.outputs.frontend }}@${{ steps.frontend.outputs.digest }}'
-          backend='${{ steps.names.outputs.backend }}@${{ steps.backend.outputs.digest }}'
+          frontend='${{ steps.image_names.outputs.frontend }}@${{ steps.frontend_build.outputs.digest }}'
+          backend='${{ steps.image_names.outputs.backend }}@${{ steps.backend_build.outputs.digest }}'
           [[ "$frontend" =~ @sha256:[a-f0-9]{64}$ ]]
           [[ "$backend" =~ @sha256:[a-f0-9]{64}$ ]]
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
 
-  update-dev-manifest:
-    name: Update dev image manifest
+  save_dev_release:
+    name: Save the new image release for development
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: publish
+    needs: build_images
     runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
     steps:
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+      - name: Check the development AWS settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          role_arn='${{ vars.AWS_ROLE_ARN_DEV }}'
+          region='${{ vars.AWS_REGION }}'
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          [[ "$role_arn" == "arn:aws:iam::${AWS_ACCOUNT_ID_DEV}:role/"* ]] || { echo 'AWS_ROLE_ARN_DEV is missing or belongs to the wrong account.' >&2; exit 1; }
+          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
+          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
+      - name: Sign in to the development AWS account
+        uses: aws-actions/configure-aws-credentials@v4.2.1
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Verify account and update SSM
-        env:
-          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
-          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
-          FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
-          BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
+      - name: Save the image release in Parameter Store
+        shell: bash
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_ACCOUNT" =~ ^[0-9]{12}$ ]] || { echo 'AWS_ACCOUNT_ID_DEV is not configured.' >&2; exit 1; }
-          [[ -n "$PARAMETER_NAME" ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured.' >&2; exit 1; }
-          actual="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
-          manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
-          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
-          printf '### Published images\n- `%s`\n- `%s`\n' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          frontend_image='${{ needs.build_images.outputs.frontend_image }}'
+          backend_image='${{ needs.build_images.outputs.backend_image }}'
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual_account" == "$AWS_ACCOUNT_ID_DEV" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
+          manifest="$(jq -cn --arg frontend "$frontend_image" --arg backend "$backend_image" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
+          aws ssm put-parameter --name "$parameter_name" --type String --value "$manifest" --overwrite
+          printf '### Published images\n- `%s`\n- `%s`\n' "$frontend_image" "$backend_image" >> "$GITHUB_STEP_SUMMARY"
 
-  # These jobs are dormant on normal main pushes. They run only when promotion is
-  # manually dispatched, so staging/prod variables are optional until then.
-  resolve-promotion:
-    name: Resolve current dev images
+  read_dev_release:
+    name: Read the current development image release
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
     outputs:
-      manifest: ${{ steps.source.outputs.manifest }}
-      frontend: ${{ steps.source.outputs.frontend }}
-      backend: ${{ steps.source.outputs.backend }}
+      manifest: ${{ steps.read_release.outputs.manifest }}
+      frontend: ${{ steps.read_release.outputs.frontend }}
+      backend: ${{ steps.read_release.outputs.backend }}
     steps:
-      - name: Require main branch
+      - name: Confirm the workflow is running from main
+        shell: bash
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Image promotion must run from main.' >&2; exit 1; }
-      - name: Authenticate to the dev account
-        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+      - name: Check the development AWS settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          role_arn='${{ vars.AWS_ROLE_ARN_DEV }}'
+          region='${{ vars.AWS_REGION }}'
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          [[ "$role_arn" == "arn:aws:iam::${AWS_ACCOUNT_ID_DEV}:role/"* ]] || { echo 'AWS_ROLE_ARN_DEV is missing or belongs to the wrong account.' >&2; exit 1; }
+          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
+          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
+      - name: Sign in to the development AWS account
+        uses: aws-actions/configure-aws-credentials@v4.2.1
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Read and validate the current dev manifest
-        id: source
-        env:
-          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID_DEV }}
-          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+      - name: Read and verify the current development release
+        id: read_release
+        shell: bash
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_ACCOUNT" =~ ^[0-9]{12}$ ]] || { echo 'AWS_ACCOUNT_ID_DEV is not configured.' >&2; exit 1; }
-          [[ -n "$PARAMETER_NAME" ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured.' >&2; exit 1; }
-          actual="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong dev AWS account: $actual" >&2; exit 1; }
-          manifest="$(aws ssm get-parameter --name "$PARAMETER_NAME" --query Parameter.Value --output text)"
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual_account" == "$AWS_ACCOUNT_ID_DEV" ]] || { echo "Wrong development AWS account: $actual_account" >&2; exit 1; }
+          manifest="$(aws ssm get-parameter --name "$parameter_name" --query Parameter.Value --output text)"
           frontend="$(jq -er '.frontend' <<< "$manifest")"
           backend="$(jq -er '.backend' <<< "$manifest")"
           pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
@@ -149,38 +162,39 @@ jobs:
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
 
-  promote:
-    name: Promote current dev images to ${{ inputs.target }}
+  promote_release:
+    name: Promote the development release to ${{ inputs.target }}
     if: github.event_name == 'workflow_dispatch'
-    needs: resolve-promotion
+    needs: read_dev_release
     runs-on: ubuntu-24.04
-    permissions:
-      id-token: write
-      contents: read
     steps:
-      - name: Validate optional target configuration
-        env:
-          ROLE_ARN: ${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
-          ACCOUNT_ID: ${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
+      - name: Check the selected AWS account settings
+        shell: bash
         run: |
           set -euo pipefail
-          [[ -n "$ROLE_ARN" ]] || { echo 'The selected target role variable is not configured.' >&2; exit 1; }
-          [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo 'The selected target account ID variable is not configured.' >&2; exit 1; }
-      - name: Authenticate to the target account
-        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+          role_arn='${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}'
+          account_id='${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}'
+          region='${{ vars.AWS_REGION }}'
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo 'The selected AWS account ID is not configured correctly.' >&2; exit 1; }
+          [[ "$role_arn" == "arn:aws:iam::${account_id}:role/"* ]] || { echo 'The selected AWS role is missing or belongs to the wrong account.' >&2; exit 1; }
+          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
+          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
+      - name: Sign in to the selected AWS account
+        uses: aws-actions/configure-aws-credentials@v4.2.1
         with:
           role-to-assume: ${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Verify account and promote manifest
-        env:
-          EXPECTED_ACCOUNT: ${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}
-          PARAMETER_NAME: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
-          IMAGE_MANIFEST: ${{ needs.resolve-promotion.outputs.manifest }}
-          FRONTEND_IMAGE: ${{ needs.resolve-promotion.outputs.frontend }}
-          BACKEND_IMAGE: ${{ needs.resolve-promotion.outputs.backend }}
+      - name: Save the promoted release in Parameter Store
+        shell: bash
         run: |
           set -euo pipefail
-          actual="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual" == "$EXPECTED_ACCOUNT" ]] || { echo "Wrong AWS account: $actual" >&2; exit 1; }
-          aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$IMAGE_MANIFEST" --overwrite
-          printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          expected_account='${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}'
+          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
+          image_manifest='${{ needs.read_dev_release.outputs.manifest }}'
+          frontend_image='${{ needs.read_dev_release.outputs.frontend }}'
+          backend_image='${{ needs.read_dev_release.outputs.backend }}'
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          [[ "$actual_account" == "$expected_account" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
+          aws ssm put-parameter --name "$parameter_name" --type String --value "$image_manifest" --overwrite
+          printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$frontend_image" "$backend_image" >> "$GITHUB_STEP_SUMMARY"

@@ -46,7 +46,6 @@ Create these non-secret repository or organisation variables:
 | Variable | Value |
 |---|---|
 | `AWS_ROLE_ARN_DEV` | existing dev OIDC role ARN |
-| `AWS_ACCOUNT_ID_DEV` | 12-digit dev account ID |
 | `AWS_REGION` | deployment region, currently `ap-south-1` |
 | `TF_STATE_BUCKET` | shared S3 bucket name |
 | `TF_STATE_KMS_KEY_ARN` | KMS ARN or an empty value for bucket-default encryption |
@@ -63,7 +62,7 @@ Optional future variables, required only when their targets are selected:
 
 Role ARNs and account IDs are identifiers, not credentials, but follow organisational variable/secrets policy. Do not add AWS access-key secrets.
 
-All account IDs and role ARNs are repository variables; neither workflow hard-codes an account. GitHub repository variables are mapped into step-level process environment variables only where Bash, the AWS CLI, Terraform, or Terragrunt must consume them. This runtime mapping is not a GitHub Environment and does not create environment-scoped configuration.
+The verified dev account ID `484632959006` is the only deployment value in each workflow-level `env` block. Staging and production account IDs and all role ARNs remain repository variables. No job or step uses an `env` block. Terraform shell steps export repository values while running because Terragrunt consumes backend and module inputs as process variables. This runtime handling is not a GitHub Environment and does not create environment-scoped configuration.
 
 No GitHub Environment is required. The workflows enforce `main` before AWS authentication or deployment. The optional workflow paths already exist, but staging and production variables and roles are not required until those targets are selected.
 
