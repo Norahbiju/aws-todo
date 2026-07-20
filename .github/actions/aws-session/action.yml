@@ -1,0 +1,122 @@
+name: Prepare AWS session
+description: Resolve a deployment target, validate its settings, assume its role, and verify the account
+
+inputs:
+  target:
+    description: Deployment target (dev, staging, or prod)
+    required: true
+  aws_account_id_dev:
+    description: Development AWS account ID
+    required: false
+  aws_role_arn_dev:
+    description: Development AWS role ARN
+    required: false
+  aws_account_id_staging:
+    description: Staging AWS account ID
+    required: false
+  aws_role_arn_staging:
+    description: Staging AWS role ARN
+    required: false
+  aws_account_id_prod:
+    description: Production AWS account ID
+    required: false
+  aws_role_arn_prod:
+    description: Production AWS role ARN
+    required: false
+  aws_region:
+    description: AWS region
+    required: true
+  tf_state_bucket:
+    description: Terraform state bucket
+    required: false
+  require_tf_state_bucket:
+    description: Whether the Terraform state bucket must be configured
+    required: false
+    default: "false"
+  ssm_image_parameter_name:
+    description: Parameter Store name containing the image release
+    required: false
+  require_ssm_image_parameter:
+    description: Whether the image parameter name must be configured
+    required: false
+    default: "false"
+
+outputs:
+  account_id:
+    description: AWS account ID selected for the target
+    value: ${{ steps.resolve.outputs.account_id }}
+  role_arn:
+    description: AWS role ARN selected for the target
+    value: ${{ steps.resolve.outputs.role_arn }}
+  region:
+    description: Validated AWS region
+    value: ${{ steps.resolve.outputs.region }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve and validate AWS settings
+      id: resolve
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        AWS_ACCOUNT_ID_DEV: ${{ inputs.aws_account_id_dev }}
+        AWS_ROLE_ARN_DEV: ${{ inputs.aws_role_arn_dev }}
+        AWS_ACCOUNT_ID_STAGING: ${{ inputs.aws_account_id_staging }}
+        AWS_ROLE_ARN_STAGING: ${{ inputs.aws_role_arn_staging }}
+        AWS_ACCOUNT_ID_PROD: ${{ inputs.aws_account_id_prod }}
+        AWS_ROLE_ARN_PROD: ${{ inputs.aws_role_arn_prod }}
+        AWS_REGION_VALUE: ${{ inputs.aws_region }}
+        TF_STATE_BUCKET_VALUE: ${{ inputs.tf_state_bucket }}
+        REQUIRE_TF_STATE_BUCKET: ${{ inputs.require_tf_state_bucket }}
+        SSM_IMAGE_PARAMETER_NAME_VALUE: ${{ inputs.ssm_image_parameter_name }}
+        REQUIRE_SSM_IMAGE_PARAMETER: ${{ inputs.require_ssm_image_parameter }}
+      run: |
+        set -euo pipefail
+        case "$TARGET" in
+          dev)
+            account_id="$AWS_ACCOUNT_ID_DEV"
+            role_arn="$AWS_ROLE_ARN_DEV"
+            ;;
+          staging)
+            account_id="$AWS_ACCOUNT_ID_STAGING"
+            role_arn="$AWS_ROLE_ARN_STAGING"
+            ;;
+          prod)
+            account_id="$AWS_ACCOUNT_ID_PROD"
+            role_arn="$AWS_ROLE_ARN_PROD"
+            ;;
+          *)
+            echo "Unsupported AWS target: $TARGET" >&2
+            exit 1
+            ;;
+        esac
+
+        [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo "The account ID for $TARGET is not configured correctly." >&2; exit 1; }
+        [[ "$role_arn" == "arn:aws:iam::${account_id}:role/"* ]] || { echo "The AWS role for $TARGET is missing or belongs to the wrong account." >&2; exit 1; }
+        [[ "$AWS_REGION_VALUE" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
+        if [[ "$REQUIRE_TF_STATE_BUCKET" == true ]]; then
+          [[ "$TF_STATE_BUCKET_VALUE" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || { echo 'TF_STATE_BUCKET is not configured correctly.' >&2; exit 1; }
+        fi
+        if [[ "$REQUIRE_SSM_IMAGE_PARAMETER" == true ]]; then
+          [[ "$SSM_IMAGE_PARAMETER_NAME_VALUE" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
+        fi
+
+        echo "account_id=$account_id" >> "$GITHUB_OUTPUT"
+        echo "role_arn=$role_arn" >> "$GITHUB_OUTPUT"
+        echo "region=$AWS_REGION_VALUE" >> "$GITHUB_OUTPUT"
+
+    - name: Sign in to the selected AWS account
+      uses: aws-actions/configure-aws-credentials@v4.2.1
+      with:
+        role-to-assume: ${{ steps.resolve.outputs.role_arn }}
+        aws-region: ${{ steps.resolve.outputs.region }}
+
+    - name: Verify the authenticated AWS account
+      shell: bash
+      env:
+        EXPECTED_ACCOUNT_ID: ${{ steps.resolve.outputs.account_id }}
+      run: |
+        set -euo pipefail
+        actual_account="$(aws sts get-caller-identity --query Account --output text)"
+        [[ "$actual_account" == "$EXPECTED_ACCOUNT_ID" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }

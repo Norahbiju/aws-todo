@@ -1,0 +1,34 @@
+name: Validate workflow request
+description: Enforce the main branch and validate an optional Terraform destroy confirmation
+
+inputs:
+  operation:
+    description: Operation name used in validation errors
+    required: true
+  action:
+    description: Optional Terraform action
+    required: false
+  target:
+    description: Optional Terraform target
+    required: false
+  destroy_confirmation:
+    description: Confirmation supplied for a Terraform destroy
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Validate the workflow request
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        REQUESTED_ACTION: ${{ inputs.action }}
+        TARGET: ${{ inputs.target }}
+        DESTROY_CONFIRMATION: ${{ inputs.destroy_confirmation }}
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "$OPERATION must run from main." >&2; exit 1; }
+        if [[ "$REQUESTED_ACTION" == destroy && "$DESTROY_CONFIRMATION" != "DESTROY $TARGET" ]]; then
+          echo 'Destroy confirmation does not match the selected target.' >&2
+          exit 1
+        fi

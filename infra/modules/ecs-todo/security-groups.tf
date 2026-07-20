@@ -9,8 +9,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_http" {
   security_group_id = aws_security_group.alb.id
   description       = "Public HTTP"
   cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 80
-  to_port           = 80
+  from_port         = var.alb_listener_port
+  to_port           = var.alb_listener_port
   ip_protocol       = "tcp"
 }
 
@@ -25,8 +25,8 @@ resource "aws_vpc_security_group_egress_rule" "alb_frontend" {
   security_group_id            = aws_security_group.alb.id
   description                  = "Frontend target traffic"
   referenced_security_group_id = aws_security_group.ecs.id
-  from_port                    = 3000
-  to_port                      = 3000
+  from_port                    = var.frontend_container_port
+  to_port                      = var.frontend_container_port
   ip_protocol                  = "tcp"
 }
 
@@ -34,8 +34,8 @@ resource "aws_vpc_security_group_egress_rule" "alb_backend" {
   security_group_id            = aws_security_group.alb.id
   description                  = "Backend target traffic"
   referenced_security_group_id = aws_security_group.ecs.id
-  from_port                    = 8000
-  to_port                      = 8000
+  from_port                    = var.backend_container_port
+  to_port                      = var.backend_container_port
   ip_protocol                  = "tcp"
 }
 
@@ -43,8 +43,8 @@ resource "aws_vpc_security_group_ingress_rule" "ecs_frontend" {
   security_group_id            = aws_security_group.ecs.id
   description                  = "Frontend traffic only from ALB"
   referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = 3000
-  to_port                      = 3000
+  from_port                    = var.frontend_container_port
+  to_port                      = var.frontend_container_port
   ip_protocol                  = "tcp"
 }
 
@@ -52,8 +52,8 @@ resource "aws_vpc_security_group_ingress_rule" "ecs_backend" {
   security_group_id            = aws_security_group.ecs.id
   description                  = "Backend traffic only from ALB"
   referenced_security_group_id = aws_security_group.alb.id
-  from_port                    = 8000
-  to_port                      = 8000
+  from_port                    = var.backend_container_port
+  to_port                      = var.backend_container_port
   ip_protocol                  = "tcp"
 }
 
@@ -63,4 +63,3 @@ resource "aws_vpc_security_group_egress_rule" "ecs_outbound" {
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }
-

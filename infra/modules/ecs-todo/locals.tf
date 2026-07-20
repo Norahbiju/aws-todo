@@ -30,8 +30,29 @@ check "image_manifest_contract" {
 
 check "capacity_bounds" {
   assert {
-    condition     = var.autoscaling_min_capacity >= 1 && var.autoscaling_max_capacity >= var.autoscaling_min_capacity
-    error_message = "Autoscaling capacity must have min >= 1 and max >= min."
+    condition = (
+      var.autoscaling_min_capacity >= 1 &&
+      var.autoscaling_max_capacity >= var.autoscaling_min_capacity &&
+      var.desired_count >= var.autoscaling_min_capacity &&
+      var.desired_count <= var.autoscaling_max_capacity
+    )
+    error_message = "Autoscaling capacity must have min >= 1 and max >= min, and desired_count must be within those bounds."
   }
 }
 
+check "container_resources_fit_task" {
+  assert {
+    condition = (
+      var.frontend_container_cpu + var.backend_container_cpu <= var.task_cpu &&
+      var.frontend_container_memory + var.backend_container_memory <= var.task_memory
+    )
+    error_message = "The combined frontend and backend CPU and memory allocations must fit within the Fargate task CPU and memory."
+  }
+}
+
+check "container_ports_are_distinct" {
+  assert {
+    condition     = var.frontend_container_port != var.backend_container_port
+    error_message = "frontend_container_port and backend_container_port must be different because both containers share one task network interface."
+  }
+}

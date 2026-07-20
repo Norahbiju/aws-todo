@@ -1,0 +1,95 @@
+name: Manage image release
+description: Read, publish, or promote a validated container image release in Parameter Store
+
+inputs:
+  operation:
+    description: Image release operation (read or write)
+    required: true
+  parameter_name:
+    description: Parameter Store name containing the image release
+    required: true
+  frontend_image:
+    description: Digest-pinned frontend image for a write operation
+    required: false
+  backend_image:
+    description: Digest-pinned backend image for a write operation
+    required: false
+  manifest:
+    description: Existing manifest to promote; omit when publishing a new release
+    required: false
+  git_sha:
+    description: Commit SHA for a new release
+    required: false
+  summary_title:
+    description: Heading written after a successful write
+    required: false
+
+outputs:
+  manifest:
+    description: Compact image release manifest from a read operation
+    value: ${{ steps.read.outputs.manifest }}
+  frontend:
+    description: Digest-pinned frontend image from a read operation
+    value: ${{ steps.read.outputs.frontend }}
+  backend:
+    description: Digest-pinned backend image from a read operation
+    value: ${{ steps.read.outputs.backend }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate the requested operation
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        set -euo pipefail
+        [[ "$OPERATION" == read || "$OPERATION" == write ]] || { echo "Unsupported image release operation: $OPERATION" >&2; exit 1; }
+
+    - name: Read and verify the image release
+      id: read
+      if: inputs.operation == 'read'
+      shell: bash
+      env:
+        PARAMETER_NAME: ${{ inputs.parameter_name }}
+      run: |
+        set -euo pipefail
+        manifest="$(aws ssm get-parameter --name "$PARAMETER_NAME" --query Parameter.Value --output text)"
+        frontend="$(jq -er '.frontend' <<< "$manifest")"
+        backend="$(jq -er '.backend' <<< "$manifest")"
+        pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
+        [[ "$frontend" =~ $pattern ]]
+        [[ "$backend" =~ $pattern ]]
+        compact="$(jq -c . <<< "$manifest")"
+        echo "manifest=$compact" >> "$GITHUB_OUTPUT"
+        echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+        echo "backend=$backend" >> "$GITHUB_OUTPUT"
+
+    - name: Validate and save the image release
+      if: inputs.operation == 'write'
+      shell: bash
+      env:
+        PARAMETER_NAME: ${{ inputs.parameter_name }}
+        FRONTEND_IMAGE: ${{ inputs.frontend_image }}
+        BACKEND_IMAGE: ${{ inputs.backend_image }}
+        IMAGE_MANIFEST: ${{ inputs.manifest }}
+        RELEASE_GIT_SHA: ${{ inputs.git_sha }}
+        SUMMARY_TITLE: ${{ inputs.summary_title }}
+      run: |
+        set -euo pipefail
+        pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
+        [[ "$FRONTEND_IMAGE" =~ $pattern ]]
+        [[ "$BACKEND_IMAGE" =~ $pattern ]]
+        [[ -n "$SUMMARY_TITLE" ]] || { echo 'A summary title is required for a write operation.' >&2; exit 1; }
+
+        if [[ -n "$IMAGE_MANIFEST" ]]; then
+          manifest="$(jq -ce . <<< "$IMAGE_MANIFEST")"
+          [[ "$(jq -er '.frontend' <<< "$manifest")" == "$FRONTEND_IMAGE" ]]
+          [[ "$(jq -er '.backend' <<< "$manifest")" == "$BACKEND_IMAGE" ]]
+        else
+          [[ "$RELEASE_GIT_SHA" =~ ^([a-f0-9]{40}|[a-f0-9]{64})$ ]] || { echo 'A valid commit SHA is required for a new release.' >&2; exit 1; }
+          manifest="$(jq -cn --arg frontend "$FRONTEND_IMAGE" --arg backend "$BACKEND_IMAGE" --arg sha "$RELEASE_GIT_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
+        fi
+
+        aws ssm put-parameter --name "$PARAMETER_NAME" --type String --value "$manifest" --overwrite
+        printf '### %s\n- `%s`\n- `%s`\n' "$SUMMARY_TITLE" "$FRONTEND_IMAGE" "$BACKEND_IMAGE" >> "$GITHUB_STEP_SUMMARY"

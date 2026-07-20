@@ -86,33 +86,26 @@ jobs:
     needs: build_images
     runs-on: ubuntu-24.04
     steps:
-      - name: Check the development AWS settings
-        shell: bash
-        run: |
-          set -euo pipefail
-          role_arn='${{ vars.AWS_ROLE_ARN_DEV }}'
-          region='${{ vars.AWS_REGION }}'
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          [[ "$role_arn" == "arn:aws:iam::${AWS_ACCOUNT_ID_DEV}:role/"* ]] || { echo 'AWS_ROLE_ARN_DEV is missing or belongs to the wrong account.' >&2; exit 1; }
-          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
-          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
-      - name: Sign in to the development AWS account
-        uses: aws-actions/configure-aws-credentials@v4.2.1
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
+      - name: Prepare the development AWS session
+        uses: ./.github/actions/aws-session
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
-          aws-region: ${{ vars.AWS_REGION }}
+          target: dev
+          aws_account_id_dev: ${{ env.AWS_ACCOUNT_ID_DEV }}
+          aws_role_arn_dev: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws_region: ${{ vars.AWS_REGION }}
+          ssm_image_parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          require_ssm_image_parameter: "true"
       - name: Save the image release in Parameter Store
-        shell: bash
-        run: |
-          set -euo pipefail
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          frontend_image='${{ needs.build_images.outputs.frontend_image }}'
-          backend_image='${{ needs.build_images.outputs.backend_image }}'
-          actual_account="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual_account" == "$AWS_ACCOUNT_ID_DEV" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
-          manifest="$(jq -cn --arg frontend "$frontend_image" --arg backend "$backend_image" --arg sha "$GITHUB_SHA" --arg updated "$(date -u +%FT%TZ)" '{frontend:$frontend,backend:$backend,git_sha:$sha,updated_at:$updated}')"
-          aws ssm put-parameter --name "$parameter_name" --type String --value "$manifest" --overwrite
-          printf '### Published images\n- `%s`\n- `%s`\n' "$frontend_image" "$backend_image" >> "$GITHUB_STEP_SUMMARY"
+        uses: ./.github/actions/image-release
+        with:
+          operation: write
+          parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          frontend_image: ${{ needs.build_images.outputs.frontend_image }}
+          backend_image: ${{ needs.build_images.outputs.backend_image }}
+          git_sha: ${{ github.sha }}
+          summary_title: Published images
 
   read_dev_release:
     name: Read the current development image release
@@ -123,44 +116,27 @@ jobs:
       frontend: ${{ steps.read_release.outputs.frontend }}
       backend: ${{ steps.read_release.outputs.backend }}
     steps:
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
       - name: Confirm the workflow is running from main
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Image promotion must run from main.' >&2; exit 1; }
-      - name: Check the development AWS settings
-        shell: bash
-        run: |
-          set -euo pipefail
-          role_arn='${{ vars.AWS_ROLE_ARN_DEV }}'
-          region='${{ vars.AWS_REGION }}'
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          [[ "$role_arn" == "arn:aws:iam::${AWS_ACCOUNT_ID_DEV}:role/"* ]] || { echo 'AWS_ROLE_ARN_DEV is missing or belongs to the wrong account.' >&2; exit 1; }
-          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
-          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
-      - name: Sign in to the development AWS account
-        uses: aws-actions/configure-aws-credentials@v4.2.1
+        uses: ./.github/actions/validate-workflow-request
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
-          aws-region: ${{ vars.AWS_REGION }}
+          operation: Image promotion
+      - name: Prepare the development AWS session
+        uses: ./.github/actions/aws-session
+        with:
+          target: dev
+          aws_account_id_dev: ${{ env.AWS_ACCOUNT_ID_DEV }}
+          aws_role_arn_dev: ${{ vars.AWS_ROLE_ARN_DEV }}
+          aws_region: ${{ vars.AWS_REGION }}
+          ssm_image_parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          require_ssm_image_parameter: "true"
       - name: Read and verify the current development release
         id: read_release
-        shell: bash
-        run: |
-          set -euo pipefail
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          actual_account="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual_account" == "$AWS_ACCOUNT_ID_DEV" ]] || { echo "Wrong development AWS account: $actual_account" >&2; exit 1; }
-          manifest="$(aws ssm get-parameter --name "$parameter_name" --query Parameter.Value --output text)"
-          frontend="$(jq -er '.frontend' <<< "$manifest")"
-          backend="$(jq -er '.backend' <<< "$manifest")"
-          pattern='^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+@sha256:[a-f0-9]{64}$'
-          [[ "$frontend" =~ $pattern ]]
-          [[ "$backend" =~ $pattern ]]
-          compact="$(jq -c . <<< "$manifest")"
-          echo "manifest=$compact" >> "$GITHUB_OUTPUT"
-          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
-          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/image-release
+        with:
+          operation: read
+          parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
 
   promote_release:
     name: Promote the development release to ${{ inputs.target }}
@@ -168,33 +144,25 @@ jobs:
     needs: read_dev_release
     runs-on: ubuntu-24.04
     steps:
-      - name: Check the selected AWS account settings
-        shell: bash
-        run: |
-          set -euo pipefail
-          role_arn='${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}'
-          account_id='${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}'
-          region='${{ vars.AWS_REGION }}'
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          [[ "$account_id" =~ ^[0-9]{12}$ ]] || { echo 'The selected AWS account ID is not configured correctly.' >&2; exit 1; }
-          [[ "$role_arn" == "arn:aws:iam::${account_id}:role/"* ]] || { echo 'The selected AWS role is missing or belongs to the wrong account.' >&2; exit 1; }
-          [[ "$region" =~ ^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$ ]] || { echo 'AWS_REGION is not configured correctly.' >&2; exit 1; }
-          [[ "$parameter_name" == /* ]] || { echo 'SSM_IMAGE_PARAMETER_NAME is not configured correctly.' >&2; exit 1; }
-      - name: Sign in to the selected AWS account
-        uses: aws-actions/configure-aws-credentials@v4.2.1
+      - name: Download the repository source code
+        uses: actions/checkout@v4.2.2
+      - name: Prepare the selected AWS session
+        uses: ./.github/actions/aws-session
         with:
-          role-to-assume: ${{ inputs.target == 'staging' && vars.AWS_ROLE_ARN_STAGING || vars.AWS_ROLE_ARN_PROD }}
-          aws-region: ${{ vars.AWS_REGION }}
+          target: ${{ inputs.target }}
+          aws_account_id_staging: ${{ vars.AWS_ACCOUNT_ID_STAGING }}
+          aws_role_arn_staging: ${{ vars.AWS_ROLE_ARN_STAGING }}
+          aws_account_id_prod: ${{ vars.AWS_ACCOUNT_ID_PROD }}
+          aws_role_arn_prod: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws_region: ${{ vars.AWS_REGION }}
+          ssm_image_parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          require_ssm_image_parameter: "true"
       - name: Save the promoted release in Parameter Store
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_account='${{ inputs.target == 'staging' && vars.AWS_ACCOUNT_ID_STAGING || vars.AWS_ACCOUNT_ID_PROD }}'
-          parameter_name='${{ vars.SSM_IMAGE_PARAMETER_NAME }}'
-          image_manifest='${{ needs.read_dev_release.outputs.manifest }}'
-          frontend_image='${{ needs.read_dev_release.outputs.frontend }}'
-          backend_image='${{ needs.read_dev_release.outputs.backend }}'
-          actual_account="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$actual_account" == "$expected_account" ]] || { echo "Wrong AWS account: $actual_account" >&2; exit 1; }
-          aws ssm put-parameter --name "$parameter_name" --type String --value "$image_manifest" --overwrite
-          printf '### Promoted to %s\n- `%s`\n- `%s`\n' '${{ inputs.target }}' "$frontend_image" "$backend_image" >> "$GITHUB_STEP_SUMMARY"
+        uses: ./.github/actions/image-release
+        with:
+          operation: write
+          parameter_name: ${{ vars.SSM_IMAGE_PARAMETER_NAME }}
+          frontend_image: ${{ needs.read_dev_release.outputs.frontend }}
+          backend_image: ${{ needs.read_dev_release.outputs.backend }}
+          manifest: ${{ needs.read_dev_release.outputs.manifest }}
+          summary_title: Promoted to ${{ inputs.target }}

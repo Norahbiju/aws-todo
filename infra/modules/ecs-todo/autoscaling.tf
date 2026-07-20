@@ -14,11 +14,10 @@ resource "aws_appautoscaling_policy" "cpu" {
   service_namespace  = aws_appautoscaling_target.ecs.service_namespace
   target_tracking_scaling_policy_configuration {
     target_value       = var.autoscaling_cpu_target
-    scale_in_cooldown  = 300
-    scale_out_cooldown = 60
+    scale_in_cooldown  = var.autoscaling_scale_in_cooldown_seconds
+    scale_out_cooldown = var.autoscaling_scale_out_cooldown_seconds
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"
     }
   }
 }
-

@@ -1,0 +1,205 @@
+name: Run Terraform operation
+description: Install pinned infrastructure tools and validate, plan, or execute the Terragrunt configuration
+
+inputs:
+  operation:
+    description: Composite operation (validate, plan, or execute)
+    required: true
+  action:
+    description: Requested Terraform action (plan, apply, or destroy)
+    required: false
+  target:
+    description: Deployment target
+    required: false
+  expected_account_id:
+    description: AWS account ID selected for the target
+    required: false
+  aws_account_id_dev:
+    description: Development AWS account ID
+    required: false
+  aws_account_id_staging:
+    description: Staging AWS account ID
+    required: false
+  aws_account_id_prod:
+    description: Production AWS account ID
+    required: false
+  aws_region:
+    description: AWS region
+    required: false
+  tf_state_bucket:
+    description: Terraform state bucket
+    required: false
+  ssm_image_parameter_name:
+    description: Parameter Store name containing the image release
+    required: false
+  terraform_version:
+    description: Terraform version
+    required: false
+    default: "1.15.5"
+  terragrunt_version:
+    description: Terragrunt version
+    required: false
+    default: "1.0.4"
+  terragrunt_sha256:
+    description: SHA-256 checksum for the Terragrunt binary
+    required: false
+    default: "387509aa15d3f38a93d0888ace2bd67c3e5eea841e1f4d585ea2174d566f35e9"
+
+outputs:
+  artifact_name:
+    description: Name for the generated plan artifact
+    value: ${{ steps.plan.outputs.artifact_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate the requested Terraform operation
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+        ACTION: ${{ inputs.action }}
+        TARGET: ${{ inputs.target }}
+        EXPECTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
+      run: |
+        set -euo pipefail
+        case "$OPERATION" in
+          validate)
+            ;;
+          plan)
+            [[ "$ACTION" == plan || "$ACTION" == apply || "$ACTION" == destroy ]]
+            [[ "$TARGET" == dev || "$TARGET" == staging || "$TARGET" == prod ]]
+            [[ "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+            ;;
+          execute)
+            [[ "$ACTION" == apply || "$ACTION" == destroy ]]
+            [[ "$TARGET" == dev || "$TARGET" == staging || "$TARGET" == prod ]]
+            [[ "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+            ;;
+          *)
+            echo "Unsupported Terraform operation: $OPERATION" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Verify the saved plan has not changed
+      if: inputs.operation == 'execute'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        ACTION: ${{ inputs.action }}
+        EXPECTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
+        AWS_REGION_VALUE: ${{ inputs.aws_region }}
+        TERRAFORM_VERSION: ${{ inputs.terraform_version }}
+        TERRAGRUNT_VERSION: ${{ inputs.terragrunt_version }}
+      run: |
+        set -euo pipefail
+        test "$(jq -r .commit deploy-artifacts/metadata.json)" = "$GITHUB_SHA"
+        test "$(jq -r .target deploy-artifacts/metadata.json)" = "$TARGET"
+        test "$(jq -r .expected_account_id deploy-artifacts/metadata.json)" = "$EXPECTED_ACCOUNT_ID"
+        test "$(jq -r .region deploy-artifacts/metadata.json)" = "$AWS_REGION_VALUE"
+        test "$(jq -r .action deploy-artifacts/metadata.json)" = "$ACTION"
+        test "$(jq -r .workflow_run_id deploy-artifacts/metadata.json)" = "$GITHUB_RUN_ID"
+        test "$(jq -r .terraform_version deploy-artifacts/metadata.json)" = "$TERRAFORM_VERSION"
+        test "$(jq -r .terragrunt_version deploy-artifacts/metadata.json)" = "$TERRAGRUNT_VERSION"
+        expected_hash="$(jq -r .plan_sha256 deploy-artifacts/metadata.json)"
+        actual_hash="$(sha256sum deploy-artifacts/plan.tfplan | awk '{print $1}')"
+        test "$actual_hash" = "$expected_hash"
+
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v3.1.2
+      with:
+        terraform_version: ${{ inputs.terraform_version }}
+        terraform_wrapper: false
+
+    - name: Install Terragrunt
+      shell: bash
+      env:
+        TERRAGRUNT_VERSION: ${{ inputs.terragrunt_version }}
+        TERRAGRUNT_SHA256: ${{ inputs.terragrunt_sha256 }}
+      run: |
+        set -euo pipefail
+        curl -fsSLo /tmp/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v${TERRAGRUNT_VERSION}/terragrunt_linux_amd64"
+        echo "${TERRAGRUNT_SHA256}  /tmp/terragrunt" | sha256sum --check
+        sudo install /tmp/terragrunt /usr/local/bin/terragrunt
+
+    - name: Check Terraform formatting and validity
+      if: inputs.operation == 'validate'
+      shell: bash
+      env:
+        AWS_ACCOUNT_ID_DEV: "000000000000"
+        AWS_ACCOUNT_ID_STAGING: "000000000001"
+        AWS_ACCOUNT_ID_PROD: "000000000002"
+        AWS_REGION: us-east-1
+        TF_STATE_BUCKET: static-validation-only
+        SSM_IMAGE_PARAMETER_NAME: /ecs-todo/container-images
+      run: |
+        set -euo pipefail
+        terraform fmt -check -recursive infra
+        terraform -chdir=infra/modules/ecs-todo init -backend=false
+        terraform -chdir=infra/modules/ecs-todo validate
+        terragrunt hcl validate --working-dir infra/live
+
+    - name: Create and record the infrastructure plan
+      id: plan
+      if: inputs.operation == 'plan'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        ACTION: ${{ inputs.action }}
+        EXPECTED_ACCOUNT_ID: ${{ inputs.expected_account_id }}
+        AWS_ACCOUNT_ID_DEV: ${{ inputs.aws_account_id_dev }}
+        AWS_ACCOUNT_ID_STAGING: ${{ inputs.aws_account_id_staging }}
+        AWS_ACCOUNT_ID_PROD: ${{ inputs.aws_account_id_prod }}
+        AWS_REGION: ${{ inputs.aws_region }}
+        TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
+        SSM_IMAGE_PARAMETER_NAME: ${{ inputs.ssm_image_parameter_name }}
+        TERRAFORM_VERSION: ${{ inputs.terraform_version }}
+        TERRAGRUNT_VERSION: ${{ inputs.terragrunt_version }}
+        TF_IN_AUTOMATION: "true"
+        TF_INPUT: "false"
+      run: |
+        set -euo pipefail
+        aws ssm get-parameter --name "$SSM_IMAGE_PARAMETER_NAME" --query Parameter.Value --output text | jq -e '.frontend and .backend' >/dev/null
+        mkdir -p deploy-artifacts
+        flags=()
+        [[ "$ACTION" == destroy ]] && flags=(-destroy)
+        set +e
+        terragrunt plan --working-dir "infra/live/${TARGET}" -lock-timeout=10m -detailed-exitcode "${flags[@]}" -out="$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
+        code=$?
+        set -e
+        [[ $code -eq 0 || $code -eq 2 ]] || exit "$code"
+        terragrunt show --working-dir "infra/live/${TARGET}" -no-color "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan" > deploy-artifacts/plan.txt
+        [[ $code -eq 0 ]] && status='No changes' || status='Changes present'
+        { echo "### ${ACTION} plan for ${TARGET}: ${status}"; echo '<details><summary>Plan excerpt (full plan is in the artifact)</summary>'; echo; echo '```terraform'; head -n 250 deploy-artifacts/plan.txt; echo '```'; echo '</details>'; } >> "$GITHUB_STEP_SUMMARY"
+
+        hash="$(sha256sum deploy-artifacts/plan.tfplan | awk '{print $1}')"
+        jq -n --arg commit "$GITHUB_SHA" --arg target "$TARGET" --arg account "$EXPECTED_ACCOUNT_ID" --arg region "$AWS_REGION" --arg action "$ACTION" --arg run_id "$GITHUB_RUN_ID" --arg terraform "$TERRAFORM_VERSION" --arg terragrunt "$TERRAGRUNT_VERSION" --arg sha256 "$hash" '{commit:$commit,target:$target,expected_account_id:$account,region:$region,action:$action,workflow_run_id:$run_id,terraform_version:$terraform,terragrunt_version:$terragrunt,plan_sha256:$sha256}' > deploy-artifacts/metadata.json
+        artifact="tf-${TARGET}-${ACTION}-${GITHUB_SHA}-${GITHUB_RUN_ID}"
+        echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
+
+    - name: Apply the saved infrastructure plan
+      if: inputs.operation == 'execute'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        ACTION: ${{ inputs.action }}
+        AWS_ACCOUNT_ID_DEV: ${{ inputs.aws_account_id_dev }}
+        AWS_ACCOUNT_ID_STAGING: ${{ inputs.aws_account_id_staging }}
+        AWS_ACCOUNT_ID_PROD: ${{ inputs.aws_account_id_prod }}
+        AWS_REGION: ${{ inputs.aws_region }}
+        TF_STATE_BUCKET: ${{ inputs.tf_state_bucket }}
+        SSM_IMAGE_PARAMETER_NAME: ${{ inputs.ssm_image_parameter_name }}
+        TF_IN_AUTOMATION: "true"
+        TF_INPUT: "false"
+      run: |
+        set -euo pipefail
+        terragrunt init --working-dir "infra/live/${TARGET}"
+        terragrunt apply --working-dir "infra/live/${TARGET}" -lock-timeout=10m -auto-approve "$GITHUB_WORKSPACE/deploy-artifacts/plan.tfplan"
+        if [[ "$ACTION" == apply ]]; then
+          cluster="$(terragrunt output --working-dir "infra/live/${TARGET}" -raw ecs_cluster_name)"
+          service="$(terragrunt output --working-dir "infra/live/${TARGET}" -raw ecs_service_name)"
+          aws ecs wait services-stable --cluster "$cluster" --services "$service"
+          { echo '### Deployment outputs'; echo '```json'; terragrunt output --working-dir "infra/live/${TARGET}" -json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "### Destroy completed for ${TARGET}" >> "$GITHUB_STEP_SUMMARY"
+        fi

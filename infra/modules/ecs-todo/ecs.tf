@@ -33,9 +33,9 @@ resource "aws_ecs_task_definition" "this" {
       name         = "frontend"
       image        = local.frontend_image
       essential    = true
-      cpu          = 256
-      memory       = 512
-      portMappings = [{ containerPort = 3000, hostPort = 3000, protocol = "tcp" }]
+      cpu          = var.frontend_container_cpu
+      memory       = var.frontend_container_memory
+      portMappings = [{ containerPort = var.frontend_container_port, hostPort = var.frontend_container_port, protocol = "tcp" }]
       environment  = [{ name = "NODE_ENV", value = "production" }]
       logConfiguration = {
         logDriver = "awslogs"
@@ -50,9 +50,9 @@ resource "aws_ecs_task_definition" "this" {
       name         = "backend"
       image        = local.backend_image
       essential    = true
-      cpu          = 256
-      memory       = 512
-      portMappings = [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }]
+      cpu          = var.backend_container_cpu
+      memory       = var.backend_container_memory
+      portMappings = [{ containerPort = var.backend_container_port, hostPort = var.backend_container_port, protocol = "tcp" }]
       environment  = [{ name = "APP_ENV", value = var.environment }]
       logConfiguration = {
         logDriver = "awslogs"
@@ -63,11 +63,11 @@ resource "aws_ecs_task_definition" "this" {
         }
       }
       healthCheck = {
-        command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)\" || exit 1"]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 20
+        command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${var.backend_container_port}${var.backend_health_check_path}', timeout=${var.backend_health_check_request_timeout_seconds})\" || exit 1"]
+        interval    = var.backend_health_check_interval_seconds
+        timeout     = var.backend_health_check_timeout_seconds
+        retries     = var.backend_health_check_retries
+        startPeriod = var.backend_health_check_start_period_seconds
       }
     }
   ])
@@ -81,10 +81,10 @@ resource "aws_ecs_service" "this" {
   task_definition                    = aws_ecs_task_definition.this.arn
   desired_count                      = var.desired_count
   launch_type                        = "FARGATE"
-  platform_version                   = "LATEST"
-  health_check_grace_period_seconds  = 90
-  deployment_minimum_healthy_percent = 50
-  deployment_maximum_percent         = 200
+  platform_version                   = var.fargate_platform_version
+  health_check_grace_period_seconds  = var.service_health_check_grace_period_seconds
+  deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
+  deployment_maximum_percent         = var.deployment_maximum_percent
   wait_for_steady_state              = true
   enable_execute_command             = false
 
@@ -100,12 +100,12 @@ resource "aws_ecs_service" "this" {
   load_balancer {
     target_group_arn = aws_lb_target_group.frontend.arn
     container_name   = "frontend"
-    container_port   = 3000
+    container_port   = var.frontend_container_port
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.backend.arn
     container_name   = "backend"
-    container_port   = 8000
+    container_port   = var.backend_container_port
   }
   lifecycle { ignore_changes = [desired_count] }
   depends_on = [aws_lb_listener.http, aws_lb_listener_rule.api]
